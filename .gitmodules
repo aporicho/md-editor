@@ -1,0 +1,9 @@
+[submodule "reference/prosemirror-model"]
+	path = reference/prosemirror-model
+	url = https://github.com/ProseMirror/prosemirror-model.git
+[submodule "reference/prosemirror-state"]
+	path = reference/prosemirror-state
+	url = https://github.com/ProseMirror/prosemirror-state.git
+[submodule "reference/prosemirror-transform"]
+	path = reference/prosemirror-transform
+	url = https://github.com/ProseMirror/prosemirror-transform.git

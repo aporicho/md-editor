@@ -2,11 +2,11 @@ mod comparedeep;
 mod schema;
 mod mark;
 mod content;
-// mod diff;
-// mod fragment;
-// mod node;
-// mod resolvedpos;
-// mod replace;
+mod node;
+mod fragment;
+mod diff;
+mod resolvedpos;
+mod replace;
 
 use std::collections::BTreeMap;
 
