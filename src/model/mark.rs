@@ -23,7 +23,7 @@ impl Mark {
         Self { mark_type, attrs }
     }
 
-    /// 测试此标记是否与另一个标记相等（类型相同且属性相同）。
+    /// 标记相等：类型指针相同且属性相同（ptr_eq 比较，MarkType Arc 在 Schema 中保持一致）。
     pub fn eq(&self, other: &Mark) -> bool {
         Arc::ptr_eq(&self.mark_type, &other.mark_type) && self.attrs == other.attrs
     }
@@ -118,5 +118,123 @@ impl Mark {
     /// 空标记集。
     pub fn none() -> Vec<Mark> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::schema::MarkType;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn mt(name: &str, rank: usize) -> Arc<MarkType> {
+        Arc::new(MarkType { name: name.into(), rank, excluded: vec![], inclusive: None })
+    }
+
+    fn mk(mark_type: Arc<MarkType>) -> Mark {
+        Mark { mark_type, attrs: BTreeMap::new() }
+    }
+
+    #[test]
+    fn add_to_set_idempotent() {
+        let m = mk(mt("bold", 0));
+        let set = vec![m.clone()];
+        let result = m.add_to_set(&set);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn add_to_set_rank_order() {
+        let m_em = mk(mt("em", 10));
+        let m_bold = mk(mt("bold", 5));
+        let set = vec![m_em.clone()];
+        let result = m_bold.add_to_set(&set);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].mark_type.name, "bold");
+        assert_eq!(result[1].mark_type.name, "em");
+    }
+
+    #[test]
+    fn add_to_set_this_excludes_other() {
+        let mt_b = Arc::new(MarkType { name: "b".into(), rank: 1, excluded: vec![], inclusive: None });
+        let mt_a = Arc::new(MarkType {
+            name: "a".into(), rank: 0,
+            excluded: vec![Arc::clone(&mt_b)],
+            inclusive: None,
+        });
+        let set = vec![mk(Arc::clone(&mt_b))];
+        let result = mk(Arc::clone(&mt_a)).add_to_set(&set);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].mark_type.name, "a");
+    }
+
+    #[test]
+    fn add_to_set_other_excludes_this() {
+        let mt_a = Arc::new(MarkType { name: "a".into(), rank: 0, excluded: vec![], inclusive: None });
+        let mt_b = Arc::new(MarkType {
+            name: "b".into(), rank: 1,
+            excluded: vec![Arc::clone(&mt_a)],
+            inclusive: None,
+        });
+        let set = vec![mk(Arc::clone(&mt_b))];
+        let result = mk(Arc::clone(&mt_a)).add_to_set(&set);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].mark_type.name, "b");
+    }
+
+    #[test]
+    fn remove_from_set_exists() {
+        let m = mk(mt("bold", 0));
+        let result = m.remove_from_set(&[m.clone()]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn remove_from_set_not_exists() {
+        let m1 = mk(mt("bold", 0));
+        let m2 = mk(mt("em", 1));
+        let result = m2.remove_from_set(&[m1.clone()]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn same_set_length_diff() {
+        let m = mk(mt("bold", 0));
+        assert!(!Mark::same_set(&[m.clone()], &[]));
+    }
+
+    #[test]
+    fn same_set_identical() {
+        let m = mk(mt("bold", 0));
+        assert!(Mark::same_set(&[m.clone()], &[m.clone()]));
+    }
+
+    #[test]
+    fn same_set_content_diff() {
+        let m1 = mk(mt("bold", 0));
+        let m2 = mk(mt("em", 1));
+        assert!(!Mark::same_set(&[m1], &[m2]));
+    }
+
+    #[test]
+    fn set_from_sorted() {
+        let m_em = mk(mt("em", 10));
+        let m_bold = mk(mt("bold", 5));
+        let result = Mark::set_from(&[m_em, m_bold]);
+        assert_eq!(result[0].mark_type.name, "bold");
+        assert_eq!(result[1].mark_type.name, "em");
+    }
+
+    #[test]
+    fn set_from_empty() {
+        assert!(Mark::set_from(&[]).is_empty());
+    }
+
+    #[test]
+    fn is_in_set() {
+        let m = mk(mt("bold", 0));
+        assert!(m.is_in_set(&[m.clone()]));
+        assert!(!m.is_in_set(&[]));
     }
 }
