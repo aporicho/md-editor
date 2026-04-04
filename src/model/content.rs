@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, OnceLock};
 
+use super::fragment::Fragment;
+use super::node::Node;
 use super::schema::NodeType;
 
 /// content 表达式匹配的一条出边。
@@ -18,22 +20,23 @@ pub struct MatchEdge {
 pub struct ContentMatch {
     /// 此状态是否是合法的结束状态
     pub valid_end: bool,
-    /// 出边列表
-    pub next: Vec<MatchEdge>,
-    // wrap_cache 省略，可在需要时添加
+    /// 出边列表（OnceLock 保证构建完成后一次性初始化）
+    pub next: OnceLock<Vec<MatchEdge>>,
 }
 
 impl ContentMatch {
     fn new(valid_end: bool) -> Self {
         Self {
             valid_end,
-            next: Vec::new(),
+            next: OnceLock::new(),
         }
     }
 
     /// 空匹配——叶子节点（无子节点）使用。
     pub fn empty() -> Arc<ContentMatch> {
-        Arc::new(ContentMatch::new(true))
+        let cm = Arc::new(ContentMatch::new(true));
+        cm.next.set(vec![]).expect("ContentMatch::empty: OnceLock already set");
+        cm
     }
 
     /// 编译 content 表达式字符串为 ContentMatch DFA。
@@ -60,8 +63,8 @@ impl ContentMatch {
 
     /// 匹配一个节点类型，返回下一个状态。
     pub fn match_type(&self, node_type: &Arc<NodeType>) -> Option<Arc<ContentMatch>> {
-        for edge in &self.next {
-            if Arc::ptr_eq(&edge.node_type, node_type) {
+        for edge in self.next.get().map(|v| v.as_slice()).unwrap_or(&[]) {
+            if edge.node_type.name == node_type.name {
                 return Some(Arc::clone(&edge.next));
             }
         }
@@ -70,12 +73,13 @@ impl ContentMatch {
 
     /// 此状态的子节点是否为行内内容。
     pub fn inline_content(&self) -> bool {
-        !self.next.is_empty() && self.next[0].node_type.is_inline()
+        let next = self.next.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        !next.is_empty() && next[0].node_type.is_inline()
     }
 
     /// 获取此状态第一个可自动生成的默认节点类型。
     pub fn default_type(&self) -> Option<Arc<NodeType>> {
-        for edge in &self.next {
+        for edge in self.next.get().map(|v| v.as_slice()).unwrap_or(&[]) {
             if !edge.node_type.is_text && !edge.node_type.has_required_attrs() {
                 return Some(Arc::clone(&edge.node_type));
             }
@@ -85,9 +89,11 @@ impl ContentMatch {
 
     /// 检查两个 ContentMatch 是否有兼容的出边。
     pub fn compatible(&self, other: &ContentMatch) -> bool {
-        for a in &self.next {
-            for b in &other.next {
-                if Arc::ptr_eq(&a.node_type, &b.node_type) {
+        let a_next = self.next.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        let b_next = other.next.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        for a in a_next {
+            for b in b_next {
+                if a.node_type.name == b.node_type.name {
                     return true;
                 }
             }
@@ -97,42 +103,102 @@ impl ContentMatch {
 
     /// 出边数量。
     pub fn edge_count(&self) -> usize {
-        self.next.len()
+        self.next.get().map(|v| v.len()).unwrap_or(0)
     }
 
     /// 获取第 n 条出边。
     pub fn edge(&self, n: usize) -> Option<&MatchEdge> {
-        self.next.get(n)
+        self.next.get().and_then(|v| v.get(n))
     }
 
-    /// 查找使目标节点类型合法的包裹节点类型序列。
-    pub fn find_wrapping(&self, target: &Arc<NodeType>) -> Option<Vec<Arc<NodeType>>> {
-        // BFS 搜索
+    /// 从 start..end 范围的 frag 子节点顺序匹配，返回最终状态。
+    pub fn match_fragment(
+        self: &Arc<Self>,
+        frag: &Fragment,
+        start: usize,
+        end: usize,
+    ) -> Option<Arc<ContentMatch>> {
+        let mut cur = Arc::clone(self);
+        for i in start..end {
+            cur = cur.match_type(&frag.child(i).node_type)?;
+        }
+        Some(cur)
+    }
+
+    /// BFS 查找最短填充序列，使得插入后接上 after[start_index..] 仍合法。
+    ///
+    /// `to_end`：要求最终状态也是 valid_end。
+    pub fn fill_before(
+        self: &Arc<Self>,
+        after: &Fragment,
+        to_end: bool,
+        start_index: usize,
+    ) -> Option<Fragment> {
+        struct Entry {
+            state: Arc<ContentMatch>,
+            types: Vec<Arc<NodeType>>,
+        }
+
+        let mut seen: HashSet<usize> = HashSet::new();
+        seen.insert(Arc::as_ptr(self) as usize);
+        let mut queue: VecDeque<Entry> = VecDeque::new();
+        queue.push_back(Entry { state: Arc::clone(self), types: vec![] });
+
+        while let Some(Entry { state, types }) = queue.pop_front() {
+            let finished = state.match_fragment(after, start_index, after.child_count());
+            if let Some(ref f) = finished {
+                if !to_end || f.valid_end {
+                    let nodes: Vec<Node> = types.iter()
+                        .filter_map(|t| t.create_and_fill())
+                        .collect();
+                    return Some(Fragment::from_array(nodes));
+                }
+            }
+            for edge in state.next.get().map(|v| v.as_slice()).unwrap_or(&[]) {
+                let nt = &edge.node_type;
+                let ptr = Arc::as_ptr(&edge.next) as usize;
+                if !nt.is_text && !nt.has_required_attrs() && !seen.contains(&ptr) {
+                    seen.insert(ptr);
+                    let mut new_types = types.clone();
+                    new_types.push(Arc::clone(nt));
+                    queue.push_back(Entry {
+                        state: Arc::clone(&edge.next),
+                        types: new_types,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// 查找使目标节点类型合法的包裹节点类型序列（索引回溯 BFS）。
+    pub fn find_wrapping(self: &Arc<Self>, target: &Arc<NodeType>) -> Option<Vec<Arc<NodeType>>> {
         struct Active {
             content_match: Arc<ContentMatch>,
             node_type: Option<Arc<NodeType>>,
-            via: Option<Box<Active>>,
+            via: Option<usize>, // 指向 active 数组中前驱的下标
         }
 
-        let mut seen = HashMap::new();
-        let mut queue = vec![Active {
-            content_match: Arc::new(ContentMatch {
-                valid_end: self.valid_end,
-                next: self.next.clone(),
-            }),
+        let mut seen: HashMap<String, bool> = HashMap::new();
+        let mut active: Vec<Active> = vec![Active {
+            content_match: Arc::clone(self),
             node_type: None,
             via: None,
         }];
+        let mut head = 0;
 
-        while let Some(current) = queue.first() {
-            // 检查当前状态是否能直接匹配目标
-            if current.content_match.match_type(target).is_some() {
-                let mut result = Vec::new();
-                let mut obj = &queue[0];
-                while let Some(ref nt) = obj.node_type {
-                    result.push(Arc::clone(nt));
-                    match &obj.via {
-                        Some(v) => obj = v.as_ref(),
+        while head < active.len() {
+            let match_ref = Arc::clone(&active[head].content_match);
+            if match_ref.match_type(target).is_some() {
+                // 沿 via 链回溯，收集包裹节点类型
+                let mut result = vec![];
+                let mut idx = head;
+                loop {
+                    match active[idx].node_type.clone() {
+                        Some(nt) => {
+                            result.push(nt);
+                            idx = active[idx].via.unwrap();
+                        }
                         None => break,
                     }
                 }
@@ -140,37 +206,29 @@ impl ContentMatch {
                 return Some(result);
             }
 
-            let current = queue.remove(0);
-            for edge in &current.content_match.next {
+            let is_root = active[head].node_type.is_none();
+            // match_ref 是 Arc::clone，不持有 active 借用，for 循环内 push 安全
+            for edge in match_ref.next.get().map(|v| v.as_slice()).unwrap_or(&[]) {
                 let nt = &edge.node_type;
                 if !nt.is_leaf()
                     && !nt.has_required_attrs()
                     && !seen.contains_key(&nt.name)
-                    && (current.node_type.is_none() || edge.next.valid_end)
+                    && (is_root || edge.next.valid_end)
                 {
                     seen.insert(nt.name.clone(), true);
                     if let Some(ref cm) = nt.content_match {
-                        queue.push(Active {
+                        active.push(Active {
                             content_match: Arc::clone(cm),
                             node_type: Some(Arc::clone(nt)),
-                            via: Some(Box::new(Active {
-                                content_match: current.content_match.clone(),
-                                node_type: current.node_type.clone(),
-                                via: None, // 简化：不保留完整链
-                            })),
+                            via: Some(head),
                         });
                     }
                 }
             }
-
-            if queue.is_empty() {
-                break;
-            }
+            head += 1;
         }
         None
     }
-
-    // match_fragment 和 fill_before 依赖 Fragment，后续移植 fragment.rs 后补全。
 }
 
 // ============================================================
@@ -207,7 +265,6 @@ impl<'a> TokenStream<'a> {
         let tokens: Vec<String> = string
             .split_whitespace()
             .flat_map(|s| {
-                // 将特殊字符拆分为独立 token
                 let mut result = Vec::new();
                 let mut current = String::new();
                 for ch in s.chars() {
@@ -318,7 +375,7 @@ fn parse_expr_range(stream: &mut TokenStream, expr: Expr) -> Result<Expr, String
         if stream.next() != Some("}") {
             Some(parse_num(stream)?)
         } else {
-            None // 无上限
+            None
         }
     } else {
         Some(min)
@@ -334,11 +391,9 @@ fn parse_expr_range(stream: &mut TokenStream, expr: Expr) -> Result<Expr, String
 }
 
 fn resolve_name(stream: &mut TokenStream, name: &str) -> Result<Vec<Arc<NodeType>>, String> {
-    // 先查直接名称
     if let Some(nt) = stream.node_types.get(name) {
         return Ok(vec![Arc::clone(nt)]);
     }
-    // 再查分组
     let mut result: Vec<Arc<NodeType>> = Vec::new();
     for nt in stream.node_types.values() {
         if nt.is_in_group(name) {
@@ -366,12 +421,10 @@ fn parse_expr_atom(stream: &mut TokenStream) -> Result<Expr, String> {
         None => return Err(stream.err("Unexpected end of expression")),
     };
 
-    // 检查是否是标识符（非特殊字符）
     if token.chars().all(|c| c.is_alphanumeric() || c == '_') {
         let types = resolve_name(stream, &token)?;
         stream.pos += 1;
 
-        // 检查 inline/block 一致性
         for nt in &types {
             let is_inline = nt.is_inline();
             match stream.inline {
@@ -401,11 +454,11 @@ fn parse_expr_atom(stream: &mut TokenStream) -> Result<Expr, String> {
 #[derive(Clone)]
 struct NfaEdge {
     term: Option<Arc<NodeType>>,
-    to: usize, // 0 = 未连接占位
+    to: usize,
 }
 
 fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
-    let mut states: Vec<Vec<NfaEdge>> = vec![vec![]]; // state 0 = 起始
+    let mut states: Vec<Vec<NfaEdge>> = vec![vec![]];
 
     fn new_state(states: &mut Vec<Vec<NfaEdge>>) -> usize {
         states.push(vec![]);
@@ -423,7 +476,6 @@ fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
         idx
     }
 
-    // 返回未连接的边的 (state_idx, edge_idx) 列表
     fn compile(
         expr: &Expr,
         from: usize,
@@ -457,11 +509,9 @@ fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
             }
             Expr::Star(inner) => {
                 let loop_state = new_state(states);
-                // epsilon from -> loop
                 add_edge(states, from, loop_state, None);
                 let inner_edges = compile(inner, loop_state, states);
                 connect(states, &inner_edges, loop_state);
-                // 一条未连接的 epsilon 边从 loop_state 出去
                 let idx = add_edge(states, loop_state, 0, None);
                 vec![(loop_state, idx)]
             }
@@ -490,7 +540,6 @@ fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
                 }
                 match max {
                     None => {
-                        // 无上限
                         let edges = compile(expr, cur, states);
                         connect(states, &edges, cur);
                     }
@@ -516,14 +565,15 @@ fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
         }
     }
 
-    let end = new_state(&mut states);
+    // 先 compile（创建中间状态），再创建 end（保证 nfa.len()-1 == accept）
     let dangling = compile(expr, 0, &mut states);
+    let end = new_state(&mut states);
     connect(&mut states, &dangling, end);
     states
 }
 
 // ============================================================
-// DFA 构建（NFA → DFA 子集构造法）
+// DFA 构建（NFA → DFA 子集构造法，arena 方案）
 // ============================================================
 
 fn null_from(nfa: &[Vec<NfaEdge>], node: usize) -> Vec<usize> {
@@ -551,9 +601,10 @@ fn scan(nfa: &[Vec<NfaEdge>], node: usize, result: &mut Vec<usize>, visited: &mu
     }
 }
 
-fn build_dfa(nfa: &[Vec<NfaEdge>]) -> Arc<ContentMatch> {
-    let mut labeled: HashMap<String, Arc<ContentMatch>> = HashMap::new();
-    explore(nfa, &null_from(nfa, 0), &mut labeled, nfa.len() - 1)
+/// arena 中的 DFA 构建节点（出边用下标索引，无 Arc 循环）
+struct BuildNode {
+    valid_end: bool,
+    edges: Vec<(Arc<NodeType>, usize)>, // (NodeType, 目标 arena 下标)
 }
 
 fn states_key(states: &[usize]) -> String {
@@ -564,12 +615,22 @@ fn states_key(states: &[usize]) -> String {
         .join(",")
 }
 
-fn explore(
+/// 递归构建 DFA 状态到 arena，返回起始节点的 arena 下标。
+fn explore_into_arena(
     nfa: &[Vec<NfaEdge>],
     states: &[usize],
-    labeled: &mut HashMap<String, Arc<ContentMatch>>,
     accept: usize,
-) -> Arc<ContentMatch> {
+    key_to_idx: &mut HashMap<String, usize>,
+    arena: &mut Vec<BuildNode>,
+) -> usize {
+    let key = states_key(states);
+    if let Some(&idx) = key_to_idx.get(&key) {
+        return idx;
+    }
+    let idx = arena.len();
+    arena.push(BuildNode { valid_end: states.contains(&accept), edges: vec![] });
+    key_to_idx.insert(key, idx);
+
     // 收集所有从当前状态集可达的 (NodeType, 目标状态集)
     let mut out: Vec<(Arc<NodeType>, Vec<usize>)> = Vec::new();
     for &node in states {
@@ -577,7 +638,7 @@ fn explore(
             if let Some(ref term) = edge.term {
                 let mut found = false;
                 for entry in &mut out {
-                    if Arc::ptr_eq(&entry.0, term) {
+                    if entry.0.name == term.name {
                         for s in null_from(nfa, edge.to) {
                             if !entry.1.contains(&s) {
                                 entry.1.push(s);
@@ -594,30 +655,48 @@ fn explore(
         }
     }
 
-    let key = states_key(states);
-    let valid_end = states.contains(&accept);
-    let state = Arc::new(ContentMatch::new(valid_end));
-    labeled.insert(key, Arc::clone(&state));
-
-    // 构建出边——需要 unsafe 来修改 Arc 内部的 next
-    // 由于 ContentMatch 在构建阶段需要可变，用 Arc::get_mut
-    let state_mut = Arc::into_inner(state).unwrap();
-    let mut state_mut = state_mut;
-
     for (node_type, mut target_states) in out {
         target_states.sort_unstable_by(|a, b| b.cmp(a));
-        let target_key = states_key(&target_states);
-        let next = if let Some(existing) = labeled.get(&target_key) {
-            Arc::clone(existing)
-        } else {
-            explore(nfa, &target_states, labeled, accept)
-        };
-        state_mut.next.push(MatchEdge { node_type, next });
+        let target_idx = explore_into_arena(nfa, &target_states, accept, key_to_idx, arena);
+        arena[idx].edges.push((node_type, target_idx));
     }
+    idx
+}
 
-    let result = Arc::new(state_mut);
-    labeled.insert(states_key(states), Arc::clone(&result));
-    result
+/// 将 arena 中的 BuildNode 转换为 Arc<ContentMatch> 节点（使用 OnceLock 一次性填充出边）。
+fn assemble(arena: Vec<BuildNode>) -> Vec<Arc<ContentMatch>> {
+    // 步骤 1：为每个 BuildNode 创建对应的 Arc<ContentMatch>（next 未初始化）
+    let nodes: Vec<Arc<ContentMatch>> = arena
+        .iter()
+        .map(|b| Arc::new(ContentMatch::new(b.valid_end)))
+        .collect();
+    // 步骤 2：填充出边。此时每个 Arc 引用计数 = 1（仅 nodes 持有）。
+    // OnceLock::set 只能成功一次，此处每节点只填充一次，安全。
+    for (i, build_node) in arena.iter().enumerate() {
+        let edges: Vec<MatchEdge> = build_node
+            .edges
+            .iter()
+            .map(|(nt, target_idx)| MatchEdge {
+                node_type: Arc::clone(nt),
+                next: Arc::clone(&nodes[*target_idx]),
+            })
+            .collect();
+        nodes[i]
+            .next
+            .set(edges)
+            .expect("assemble: duplicate edge initialization");
+    }
+    nodes
+}
+
+fn build_dfa(nfa: &[Vec<NfaEdge>]) -> Arc<ContentMatch> {
+    let initial_states = null_from(nfa, 0);
+    let accept = nfa.len() - 1;
+    let mut key_to_idx = HashMap::new();
+    let mut arena = Vec::new();
+    let root_idx = explore_into_arena(nfa, &initial_states, accept, &mut key_to_idx, &mut arena);
+    let nodes = assemble(arena);
+    Arc::clone(&nodes[root_idx])
 }
 
 fn check_for_dead_ends(start: &Arc<ContentMatch>, expr: &str) -> Result<(), String> {
@@ -630,7 +709,7 @@ fn check_for_dead_ends(start: &Arc<ContentMatch>, expr: &str) -> Result<(), Stri
         let mut dead = !state.valid_end;
         let mut nodes = Vec::new();
 
-        for edge in &state.next {
+        for edge in state.next.get().map(|v| v.as_slice()).unwrap_or(&[]) {
             nodes.push(edge.node_type.name.clone());
             if dead && (!edge.node_type.is_text && !edge.node_type.has_required_attrs()) {
                 dead = false;
@@ -649,4 +728,154 @@ fn check_for_dead_ends(start: &Arc<ContentMatch>, expr: &str) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::schema::{NodeType, MarkType};
+    use super::super::node::Node;
+    use super::super::fragment::Fragment;
+    use std::collections::BTreeMap;
+
+    fn node_type(name: &str, is_block: bool) -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: name.into(), groups: vec![], is_block,
+            is_text: name == "text", inline_content: false,
+            mark_set: None, content_match: None,
+        })
+    }
+
+    fn schema_with(types: &[(&str, bool)]) -> HashMap<String, Arc<NodeType>> {
+        types.iter().map(|(name, is_block)| {
+            (name.to_string(), node_type(name, *is_block))
+        }).collect()
+    }
+
+    fn text_node(s: &str, nt: &Arc<NodeType>) -> Node {
+        Node {
+            node_type: Arc::clone(nt),
+            attrs: BTreeMap::new(),
+            content: Fragment::empty(),
+            marks: vec![],
+            text: Some(s.into()),
+        }
+    }
+
+    fn block_node(nt: Arc<NodeType>) -> Node {
+        Node {
+            node_type: nt,
+            attrs: BTreeMap::new(),
+            content: Fragment::empty(),
+            marks: vec![],
+            text: None,
+        }
+    }
+
+    // ── parse ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_empty_expr() {
+        let types = schema_with(&[]);
+        let cm = ContentMatch::parse("", &types).unwrap();
+        assert!(cm.valid_end);
+        assert_eq!(cm.edge_count(), 0);
+    }
+
+    #[test]
+    fn parse_single_no_panic() {
+        // 覆盖 fix 1.1：DFA 构建不 panic
+        let types = schema_with(&[("paragraph", true)]);
+        let cm = ContentMatch::parse("paragraph", &types);
+        assert!(cm.is_ok());
+    }
+
+    #[test]
+    fn parse_plus_no_panic() {
+        let types = schema_with(&[("paragraph", true)]);
+        let cm = ContentMatch::parse("paragraph+", &types);
+        assert!(cm.is_ok());
+    }
+
+    #[test]
+    fn parse_star_valid_end() {
+        let types = schema_with(&[("paragraph", true)]);
+        let cm = ContentMatch::parse("paragraph*", &types).unwrap();
+        assert!(cm.valid_end, "star expr should allow empty");
+    }
+
+    #[test]
+    fn parse_range() {
+        let types = schema_with(&[("heading", true)]);
+        assert!(ContentMatch::parse("heading{1,3}", &types).is_ok());
+    }
+
+    #[test]
+    fn parse_choice() {
+        let types = schema_with(&[("p", true), ("h", true)]);
+        assert!(ContentMatch::parse("p | h", &types).is_ok());
+    }
+
+    // ── match_type ───────────────────────────────────────────
+
+    #[test]
+    fn match_type_advances_state() {
+        let types = schema_with(&[("p", true)]);
+        let p_type = Arc::clone(types.get("p").unwrap());
+        let cm = ContentMatch::parse("p+", &types).unwrap();
+        let next = cm.match_type(&p_type);
+        assert!(next.is_some(), "should match 'p'");
+    }
+
+    #[test]
+    fn match_type_unknown_returns_none() {
+        let types = schema_with(&[("p", true)]);
+        let cm = ContentMatch::parse("p", &types).unwrap();
+        let other = node_type("other", true);
+        assert!(cm.match_type(&other).is_none());
+    }
+
+    // ── match_fragment ───────────────────────────────────────
+
+    #[test]
+    fn match_fragment_empty() {
+        let types = schema_with(&[("p", true)]);
+        let cm = ContentMatch::parse("p*", &types).unwrap();
+        let frag = Fragment::empty();
+        let result = cm.match_fragment(&frag, 0, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().valid_end);
+    }
+
+    #[test]
+    fn match_fragment_one_node() {
+        let types = schema_with(&[("p", true)]);
+        let p_type = Arc::clone(types.get("p").unwrap());
+        let cm = ContentMatch::parse("p+", &types).unwrap();
+        let frag = Fragment::from_array(vec![block_node(p_type)]);
+        let result = cm.match_fragment(&frag, 0, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().valid_end);
+    }
+
+    #[test]
+    fn match_fragment_no_match() {
+        let types = schema_with(&[("p", true), ("h", true)]);
+        let h_type = Arc::clone(types.get("h").unwrap());
+        let cm = ContentMatch::parse("p+", &types).unwrap();
+        let frag = Fragment::from_array(vec![block_node(h_type)]);
+        let result = cm.match_fragment(&frag, 0, 1);
+        assert!(result.is_none());
+    }
+
+    // ── find_wrapping ────────────────────────────────────────
+
+    #[test]
+    fn find_wrapping_direct_match() {
+        let types = schema_with(&[("p", true)]);
+        let p_type = Arc::clone(types.get("p").unwrap());
+        let cm = ContentMatch::parse("p+", &types).unwrap();
+        let result = cm.find_wrapping(&p_type);
+        assert_eq!(result, Some(vec![]));
+    }
 }

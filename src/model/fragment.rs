@@ -219,7 +219,7 @@ impl Fragment {
         Fragment::new(result, size)
     }
 
-    /// 按子节点索引截取 [from, to)。
+    /// 按子节点索引截取 [from, to)（不合并相邻文本节点）。
     pub fn cut_by_index(&self, from: usize, to: usize) -> Fragment {
         if from == to {
             return Fragment::empty();
@@ -227,7 +227,9 @@ impl Fragment {
         if from == 0 && to == self.content.len() {
             return self.clone();
         }
-        Fragment::from_array(self.content[from..to].to_vec())
+        let content = self.content[from..to].to_vec();
+        let size = content.iter().map(|n| n.node_size()).sum();
+        Fragment::new(content, size)
     }
 
     /// 替换第 index 个子节点，返回新片段。
@@ -310,4 +312,143 @@ pub enum FragmentInput {
     Fragment(Fragment),
     Node(Node),
     Nodes(Vec<Node>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::schema::{NodeType, MarkType};
+    use super::super::node::Node;
+    use super::super::mark::Mark;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn text_type() -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: "text".into(), groups: vec![], is_block: false,
+            is_text: true, inline_content: false, mark_set: None, content_match: None,
+        })
+    }
+
+    fn block_type(name: &str) -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: name.into(), groups: vec![], is_block: true,
+            is_text: false, inline_content: false, mark_set: None, content_match: None,
+        })
+    }
+
+    fn text(s: &str) -> Node {
+        Node {
+            node_type: text_type(), attrs: BTreeMap::new(),
+            content: Fragment::empty(), marks: vec![], text: Some(s.into()),
+        }
+    }
+
+    fn block(name: &str, children: Vec<Node>) -> Node {
+        Node {
+            node_type: block_type(name), attrs: BTreeMap::new(),
+            content: Fragment::from_array(children), marks: vec![], text: None,
+        }
+    }
+
+    #[test]
+    fn from_array_empty() {
+        let f = Fragment::from_array(vec![]);
+        assert_eq!(f.size, 0);
+        assert_eq!(f.child_count(), 0);
+    }
+
+    #[test]
+    fn from_array_merges_adjacent_text() {
+        let f = Fragment::from_array(vec![text("hel"), text("lo")]);
+        assert_eq!(f.child_count(), 1);
+        assert_eq!(f.child(0).text(), Some("hello"));
+    }
+
+    #[test]
+    fn from_array_no_merge_different_types() {
+        let f = Fragment::from_array(vec![text("hello"), block("p", vec![])]);
+        assert_eq!(f.child_count(), 2);
+    }
+
+    #[test]
+    fn cut_full_range() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        let cut = f.cut(0, Some(5));
+        assert!(cut.eq(&f));
+    }
+
+    #[test]
+    fn cut_partial_text() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        let cut = f.cut(1, Some(4));
+        assert_eq!(cut.child(0).text(), Some("ell"));
+    }
+
+    #[test]
+    fn cut_by_index_no_merge() {
+        // cut_by_index must NOT merge adjacent text nodes (fix 2.8)
+        let t1 = text("hello");
+        let t2 = text(" world");
+        let f = Fragment::from_array(vec![t1, t2]);
+        // from_array merges them into one, so let's build manually via new
+        // Actually we need two distinct text nodes to test cut_by_index
+        // Since from_array merges them, we need a block structure
+        let p1 = block("p", vec![]);
+        let p2 = block("p", vec![]);
+        let f = Fragment::from_array(vec![p1, p2]);
+        let cut = f.cut_by_index(0, 2);
+        assert_eq!(cut.child_count(), 2);
+    }
+
+    #[test]
+    fn cut_by_index_empty() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        let cut = f.cut_by_index(0, 0);
+        assert_eq!(cut.size, 0);
+    }
+
+    #[test]
+    fn cut_by_index_full() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        let cut = f.cut_by_index(0, 1);
+        assert_eq!(cut.child_count(), 1);
+    }
+
+    #[test]
+    fn append_empty_plus_nonempty() {
+        let a = Fragment::empty();
+        let b = Fragment::from_array(vec![text("hello")]);
+        let result = a.append(&b);
+        assert_eq!(result.child_count(), 1);
+    }
+
+    #[test]
+    fn append_merges_boundary_text() {
+        let a = Fragment::from_array(vec![text("hel")]);
+        let b = Fragment::from_array(vec![text("lo")]);
+        let result = a.append(&b);
+        assert_eq!(result.child_count(), 1);
+        assert_eq!(result.child(0).text(), Some("hello"));
+    }
+
+    #[test]
+    fn find_index_start() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        assert_eq!(f.find_index(0), (0, 0));
+    }
+
+    #[test]
+    fn find_index_end() {
+        let f = Fragment::from_array(vec![text("hello")]);
+        assert_eq!(f.find_index(5), (1, 5));
+    }
+
+    #[test]
+    fn find_index_middle() {
+        let f = Fragment::from_array(vec![text("hello"), block("p", vec![])]);
+        // text is 5, block is 2 → total 7
+        // pos=5 should be index 1 (block starts at 5)
+        assert_eq!(f.find_index(5), (1, 5));
+    }
 }

@@ -79,18 +79,14 @@ impl Slice {
     }
 
     /// 移除切片中 from..to 范围的内容（内部用）。
-    pub fn remove_between(&self, from: usize, to: usize) -> Slice {
-        Slice::new(
-            remove_range(&self.content, from + self.open_start, to + self.open_start),
-            self.open_start,
-            self.open_end,
-        )
+    pub fn remove_between(&self, from: usize, to: usize) -> Result<Slice, ReplaceError> {
+        let content =
+            remove_range(&self.content, from + self.open_start, to + self.open_start)?;
+        Ok(Slice::new(content, self.open_start, self.open_end))
     }
 }
 
 /// 核心 replace 算法：用 slice 替换 $from..$to 之间的内容。
-///
-/// 对应 prosemirror-model/src/replace.ts replace()
 pub fn replace(
     from: &ResolvedPos,
     to: &ResolvedPos,
@@ -144,10 +140,9 @@ fn replace_outer(
     close(&node, content)
 }
 
+/// 修复 2.7：使用 NodeType::compatible_content 替代名称比较。
 fn check_join(main: &Node, sub: &Node) -> Result<(), ReplaceError> {
-    if !sub.node_type.name.eq(&main.node_type.name) {
-        // TODO: 等 NodeType.compatible_content 移植完后用正确检查
-        // 暂时只检查类型名是否一致
+    if !main.node_type.compatible_content(&sub.node_type) {
         return Err(ReplaceError(format!(
             "Cannot join {} onto {}",
             sub.node_type.name, main.node_type.name
@@ -218,8 +213,11 @@ fn add_range(
     }
 }
 
+/// 修复 2.7：调用 node_type.check_content 验证内容合法性。
 fn close(node: &Node, content: Fragment) -> Result<Node, ReplaceError> {
-    // TODO: node.type.check_content(content) — 等 Schema 移植后补全
+    node.node_type
+        .check_content(&content)
+        .map_err(|e| ReplaceError(e))?;
     Ok(node.copy(content))
 }
 
@@ -303,55 +301,53 @@ fn prepare_slice_for_replace(
     }
     let start_pos = slice.open_start + extra;
     let end_pos = node.content.size - slice.open_end - extra;
-    let start = ResolvedPos::resolve(&node, start_pos)
-        .map_err(|e| ReplaceError(e))?;
-    let end = ResolvedPos::resolve(&node, end_pos)
-        .map_err(|e| ReplaceError(e))?;
+    let start = ResolvedPos::resolve(&node, start_pos).map_err(ReplaceError)?;
+    let end = ResolvedPos::resolve(&node, end_pos).map_err(ReplaceError)?;
     Ok((start, end))
 }
 
 /// 从内容中移除 from..to 范围。
-fn remove_range(content: &Fragment, from: usize, to: usize) -> Fragment {
+///
+/// 修复 2.7：非平坦范围返回 Err 而非静默返回原内容。
+fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment, ReplaceError> {
     let (index, offset) = content.find_index(from);
     let child = content.maybe_child(index);
-    let (index_to, offset_to) = content.find_index(to);
+    let (index_to, _offset_to) = content.find_index(to);
 
     if offset == from || child.map(|c| c.is_text()).unwrap_or(false) {
-        // 平坦情况
-        return content
-            .cut(0, Some(from))
-            .append(&content.cut(to, None));
+        return Ok(content.cut(0, Some(from)).append(&content.cut(to, None)));
     }
 
     if index != index_to {
-        // 非平坦范围，不应发生
-        return content.clone();
+        return Err(ReplaceError("Removing non-flat range".into()));
     }
 
     if let Some(child) = child {
-        let inner = remove_range(
-            &child.content,
-            from - offset - 1,
-            to - offset - 1,
-        );
-        return content.replace_child(index, child.copy(inner));
+        let inner = remove_range(&child.content, from - offset - 1, to - offset - 1)?;
+        return Ok(content.replace_child(index, child.copy(inner)));
     }
 
-    content.clone()
+    Ok(content.clone())
 }
 
 /// 在 content 的 dist 位置插入 insert。
+///
+/// 修复 2.7：当 parent 存在时调用 can_replace 检查。
 fn insert_into(
     content: &Fragment,
     dist: usize,
     insert: &Fragment,
-    _parent: Option<&Node>,
+    parent: Option<&Node>,
 ) -> Option<Fragment> {
     let (index, offset) = content.find_index(dist);
     let child = content.maybe_child(index);
 
     if offset == dist || child.map(|c| c.is_text()).unwrap_or(false) {
-        // TODO: parent.can_replace 检查等 Node 移植完后补全
+        if let Some(p) = parent {
+            if !p.can_replace(index, index, insert, 0, insert.child_count()) {
+                return None;
+            }
+        }
         return Some(
             content
                 .cut(0, Some(dist))
@@ -366,4 +362,138 @@ fn insert_into(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::schema::{NodeType, MarkType};
+    use super::super::node::Node;
+    use super::super::fragment::Fragment;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn block_nt(name: &str) -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: name.into(), groups: vec![], is_block: true,
+            is_text: false, inline_content: false, mark_set: None, content_match: None,
+        })
+    }
+
+    fn text_nt() -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: "text".into(), groups: vec![], is_block: false,
+            is_text: true, inline_content: false, mark_set: None, content_match: None,
+        })
+    }
+
+    fn text(s: &str) -> Node {
+        Node {
+            node_type: text_nt(), attrs: BTreeMap::new(),
+            content: Fragment::empty(), marks: vec![], text: Some(s.into()),
+        }
+    }
+
+    fn block(nt: Arc<NodeType>, children: Vec<Node>) -> Node {
+        Node {
+            node_type: nt, attrs: BTreeMap::new(),
+            content: Fragment::from_array(children),
+            marks: vec![], text: None,
+        }
+    }
+
+    // ── Slice ────────────────────────────────────────────────
+
+    #[test]
+    fn slice_empty() {
+        let s = Slice::empty();
+        assert_eq!(s.open_start, 0);
+        assert_eq!(s.open_end, 0);
+        assert_eq!(s.content.size, 0);
+    }
+
+    #[test]
+    fn slice_max_open_leaf() {
+        let txt = text("hello");
+        let f = Fragment::from_array(vec![txt]);
+        let s = Slice::max_open(&f);
+        assert_eq!(s.open_start, 0);
+        assert_eq!(s.open_end, 0);
+    }
+
+    #[test]
+    fn slice_max_open_block() {
+        use super::super::content::ContentMatch;
+        use std::collections::HashMap;
+
+        // inner 用 content_match=None（leaf），outer 用真正的 non-leaf ContentMatch
+        let inner_nt = block_nt("inner");
+        let mut types: HashMap<String, Arc<NodeType>> = HashMap::new();
+        types.insert("inner".into(), Arc::clone(&inner_nt));
+        let cm = ContentMatch::parse("inner*", &types).unwrap();
+        let outer_nt = Arc::new(NodeType {
+            name: "outer".into(), groups: vec![], is_block: true,
+            is_text: false, inline_content: false, mark_set: None,
+            content_match: Some(cm),
+        });
+
+        let inner = block(Arc::clone(&inner_nt), vec![]);
+        let outer = Node {
+            node_type: Arc::clone(&outer_nt),
+            attrs: std::collections::BTreeMap::new(),
+            content: Fragment::from_array(vec![inner]),
+            marks: vec![], text: None,
+        };
+        let f = Fragment::from_array(vec![outer]);
+        let s = Slice::max_open(&f);
+        // outer is non-leaf, inner is leaf → open depth = 1
+        assert_eq!(s.open_start, 1);
+        assert_eq!(s.open_end, 1);
+    }
+
+    // ── remove_range ────────────────────────────────────────
+
+    #[test]
+    fn remove_range_flat() {
+        // Content: [text "hello"] (size=5)
+        // Remove 1..3 → flat case (text node)
+        let f = Fragment::from_array(vec![text("hello")]);
+        let result = remove_range(&f, 1, 3);
+        assert!(result.is_ok());
+        let r = result.unwrap();
+        // "h" + "lo" = "hlo" (merged as same type)
+        assert_eq!(r.child(0).text(), Some("hlo"));
+    }
+
+    #[test]
+    fn remove_range_non_flat_returns_err() {
+        // Content: [p1(nodeSize=4), p2(nodeSize=4)]
+        // from=1 (inside p1), to=5 (inside p2) → non-flat
+        let p1 = block(block_nt("p"), vec![text("ab")]);
+        let p2 = block(block_nt("p"), vec![text("cd")]);
+        let f = Fragment::from_array(vec![p1, p2]);
+        // p1.nodeSize = 2+2 = 4, p2.nodeSize = 4
+        // from=1 (inside p1 at content start), to=5 (inside p2)
+        let result = remove_range(&f, 1, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().0.contains("non-flat"));
+    }
+
+    // ── check_join via compatible_content ────────────────────
+
+    #[test]
+    fn check_join_same_type_passes() {
+        let nt = block_nt("p");
+        let n1 = block(Arc::clone(&nt), vec![]);
+        let n2 = block(Arc::clone(&nt), vec![]);
+        // Same Arc instance → ptr_eq passes
+        assert!(check_join(&n1, &n2).is_ok());
+    }
+
+    #[test]
+    fn check_join_different_types_fails() {
+        let n1 = block(block_nt("p"), vec![]);
+        let n2 = block(block_nt("div"), vec![]);
+        assert!(check_join(&n1, &n2).is_err());
+    }
 }

@@ -117,3 +117,86 @@ pub fn find_diff_end(
         pos_b -= size;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::schema::{NodeType, MarkType};
+    use super::super::node::Node;
+    use super::super::fragment::Fragment;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn text_type() -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: "text".into(), groups: vec![], is_block: false,
+            is_text: true, inline_content: false, mark_set: None, content_match: None,
+        })
+    }
+
+    fn text(s: &str) -> Node {
+        Node {
+            node_type: text_type(), attrs: BTreeMap::new(),
+            content: Fragment::empty(), marks: vec![], text: Some(s.into()),
+        }
+    }
+
+    fn frag(nodes: Vec<Node>) -> Fragment { Fragment::from_array(nodes) }
+
+    #[test]
+    fn find_diff_start_identical() {
+        let t = text("hello");
+        let a = frag(vec![t.clone()]);
+        let b = frag(vec![t.clone()]);
+        assert_eq!(find_diff_start(&a, &b, 0), None);
+    }
+
+    #[test]
+    fn find_diff_start_first_node_different() {
+        let a = frag(vec![text("hello")]);
+        let b = frag(vec![text("world")]);
+        assert_eq!(find_diff_start(&a, &b, 0), Some(0));
+    }
+
+    #[test]
+    fn find_diff_start_text_internal() {
+        let a = frag(vec![text("hello")]);
+        let b = frag(vec![text("helXo")]);
+        assert_eq!(find_diff_start(&a, &b, 0), Some(3));
+    }
+
+    #[test]
+    fn find_diff_start_length_difference() {
+        let a = frag(vec![text("hello"), text(" world")]);
+        let b = frag(vec![text("hello")]);
+        // After merging, a has one node "hello world" and b has one "hello"
+        // Actually from_array merges same-markup adjacent text nodes
+        // So a = ["hello world"], b = ["hello"]
+        // diff starts at pos 5
+        assert!(find_diff_start(&a, &b, 0).is_some());
+    }
+
+    #[test]
+    fn find_diff_end_identical() {
+        let t = text("hello");
+        let a = frag(vec![t.clone()]);
+        let b = frag(vec![t.clone()]);
+        assert_eq!(find_diff_end(&a, &b, 5, 5), None);
+    }
+
+    #[test]
+    fn find_diff_end_last_different() {
+        let a = frag(vec![text("hello")]);
+        let b = frag(vec![text("world")]);
+        assert_eq!(find_diff_end(&a, &b, 5, 5), Some((5, 5)));
+    }
+
+    #[test]
+    fn find_diff_end_text_tail() {
+        let a = frag(vec![text("hello")]);
+        let b = frag(vec![text("Xello")]);
+        // Both end with "ello", differ at first char
+        let result = find_diff_end(&a, &b, 5, 5);
+        assert_eq!(result, Some((1, 1)));
+    }
+}
