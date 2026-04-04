@@ -8,7 +8,7 @@
 
 ## 概述
 
-将 `prosemirror-model` TypeScript 库完整移植为 Rust，作为编辑器数据模型的基础层。model 不依赖任何其他模块，所有上层模块（transform、state 等）都依赖它。
+将 `prosemirror-model` TypeScript 库以 Rust 重写，作为编辑器数据模型的基础层。重写目标是功能和语义与原始库完全对齐，但 API 设计以"在 Rust 里最自然、最安全"为准，而非逐字对应 TS 代码。model 不依赖任何其他模块，所有上层模块（transform、state 等）都依赖它。
 
 ---
 
