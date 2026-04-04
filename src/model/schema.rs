@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::content::ContentMatch;
@@ -221,6 +222,184 @@ impl PartialEq for MarkType {
     }
 }
 
+/// 中央类型注册表。所有 NodeType / MarkType 均通过此处统一创建。
+pub struct Schema {
+    pub nodes: HashMap<String, Arc<NodeType>>,
+    pub marks: HashMap<String, Arc<MarkType>>,
+    /// 文档根节点类型（spec.nodes 第一个）
+    pub top_node_type: Arc<NodeType>,
+}
+
+impl Schema {
+    pub fn new(spec: SchemaSpec) -> Result<Arc<Self>, SchemaError> {
+        if spec.nodes.is_empty() {
+            return Err(SchemaError::EmptyNodes);
+        }
+
+        // ── 第一遍：注册所有 MarkType（excluded 先留空）────────────
+        let mut mark_types: HashMap<String, Arc<MarkType>> = HashMap::new();
+        for (name, ms) in &spec.marks {
+            mark_types.insert(name.clone(), Arc::new(MarkType {
+                name: name.clone(),
+                rank: ms.rank,
+                excluded: vec![],
+                inclusive: ms.inclusive,
+            }));
+        }
+
+        // 填充 excluded：先收集所有 excluded 名称列表，再重建最终 Arc
+        // （不能在持有 Arc clone 的同时调用 Arc::get_mut，需先把旧 Arc 全部丢掉）
+        let excluded_names: Vec<(String, Vec<String>)> = spec.marks.iter()
+            .map(|(name, ms)| {
+                let names = Self::resolve_excluded_names(name, ms, &mark_types)?;
+                Ok((name.clone(), names))
+            })
+            .collect::<Result<Vec<_>, SchemaError>>()?;
+
+        // 用最终 excluded 重建每个 MarkType：
+        // 先在不可变借用下把所有 excluded Arc 全部收集成 Vec<(name, Vec<Arc>)>，
+        // 再统一 remove / re-insert（此时旧 Arc 已 drop，引用计数为 0）。
+        let resolved_excluded: Vec<(String, Vec<Arc<MarkType>>)> = excluded_names.iter()
+            .map(|(name, exc_names)| {
+                let arcs: Vec<Arc<MarkType>> = exc_names.iter()
+                    .map(|n| Arc::clone(mark_types.get(n).unwrap()))
+                    .collect();
+                (name.clone(), arcs)
+            })
+            .collect();
+
+        // 现在把旧 Arc 全部从 map 移出，引用计数降回 1，随即 drop
+        let old_marks: Vec<(String, Arc<MarkType>)> = resolved_excluded.iter()
+            .map(|(name, _)| (name.clone(), mark_types.remove(name).unwrap()))
+            .collect();
+
+        // 创建新 Arc（带 excluded）并重新插入
+        for ((name, arcs), (_, old)) in resolved_excluded.into_iter().zip(old_marks.into_iter()) {
+            mark_types.insert(name, Arc::new(MarkType {
+                name: old.name.clone(),
+                rank: old.rank,
+                inclusive: old.inclusive,
+                excluded: arcs,
+            }));
+        }
+
+        // ── 第一遍：注册所有 NodeType（content_match = None）────────
+        let mut node_types: HashMap<String, Arc<NodeType>> = HashMap::new();
+        for (name, ns) in &spec.nodes {
+            node_types.insert(name.clone(), Arc::new(NodeType {
+                name: name.clone(),
+                groups: ns.group.as_deref()
+                    .map(|g| g.split_whitespace().map(String::from).collect())
+                    .unwrap_or_default(),
+                is_block: !ns.inline,
+                is_text: ns.is_text,
+                inline_content: false,
+                mark_set: None,
+                content_match: None,
+            }));
+        }
+
+        // ── 第二遍：先解析所有 content 表达式（只需 &node_types 不可变借用）──
+        let parsed_content: Vec<Option<Arc<ContentMatch>>> = spec.nodes.iter()
+            .map(|(_, ns)| {
+                if let Some(ref expr) = ns.content {
+                    ContentMatch::parse(expr, &node_types)
+                        .map(Some)
+                        .map_err(SchemaError::ContentParseError)
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // ── 第三遍：填充 inline_content / content_match / mark_set ──
+        // ContentMatch::parse 内部会 Arc::clone NodeType，使引用计数 > 1，
+        // 无法用 Arc::get_mut；改为重建整个 NodeType Arc 并替换 HashMap 中的旧值。
+        let mark_sets: Vec<(String, Option<Vec<Arc<MarkType>>>)> = spec.nodes.iter()
+            .map(|(name, ns)| {
+                let ms = Self::resolve_mark_set(&ns.marks, &mark_types)?;
+                Ok((name.clone(), ms))
+            })
+            .collect::<Result<Vec<_>, SchemaError>>()?;
+
+        for ((name, ns), cm_opt, (_, mark_set)) in
+            spec.nodes.iter()
+                .zip(parsed_content.into_iter())
+                .zip(mark_sets.into_iter())
+                .map(|((a, b), c)| (a, b, c))
+        {
+            let old = node_types.remove(name).unwrap();
+            let inline_content = cm_opt.as_ref().map(|cm| cm.inline_content()).unwrap_or(false);
+            node_types.insert(name.clone(), Arc::new(NodeType {
+                name: old.name.clone(),
+                groups: old.groups.clone(),
+                is_block: old.is_block,
+                is_text: old.is_text,
+                inline_content,
+                mark_set,
+                content_match: cm_opt,
+            }));
+        }
+
+        let top_node_type = Arc::clone(
+            node_types.get(&spec.nodes[0].0).unwrap()
+        );
+
+        Ok(Arc::new(Schema { nodes: node_types, marks: mark_types, top_node_type }))
+    }
+
+    fn resolve_mark_set(
+        marks: &Option<String>,
+        mark_types: &HashMap<String, Arc<MarkType>>,
+    ) -> Result<Option<Vec<Arc<MarkType>>>, SchemaError> {
+        match marks.as_deref() {
+            None | Some("_") => Ok(None),
+            Some("") => Ok(Some(vec![])),
+            Some(s) => {
+                let set = s.split_whitespace()
+                    .map(|name| {
+                        mark_types.get(name)
+                            .map(Arc::clone)
+                            .ok_or_else(|| SchemaError::UnknownMarkRef(name.to_string()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Some(set))
+            }
+        }
+    }
+
+    /// 返回 excluded mark 的名称列表（不持有 Arc，避免引用计数干扰 Arc::get_mut）
+    fn resolve_excluded_names(
+        self_name: &str,
+        ms: &MarkSpec,
+        mark_types: &HashMap<String, Arc<MarkType>>,
+    ) -> Result<Vec<String>, SchemaError> {
+        match ms.excludes.as_deref() {
+            None | Some("") => {
+                if mark_types.contains_key(self_name) {
+                    Ok(vec![self_name.to_string()])
+                } else {
+                    Ok(vec![])
+                }
+            }
+            Some("_") => {
+                Ok(mark_types.keys().cloned().collect())
+            }
+            Some(s) => {
+                s.split_whitespace()
+                    .map(|name| {
+                        if mark_types.contains_key(name) {
+                            Ok(name.to_string())
+                        } else {
+                            Err(SchemaError::UnknownMarkRef(name.to_string()))
+                        }
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +521,52 @@ mod tests {
         });
         assert!(nt.is_textblock());
         assert!(!make_nt("div", true).is_textblock());
+    }
+
+    // ── Schema::new ──────────────────────────────────────────
+
+    #[test]
+    fn schema_new_basic() {
+        let spec = SchemaSpec {
+            nodes: vec![
+                ("doc".into(), NodeSpec { content: Some("paragraph+".into()), ..Default::default() }),
+                ("paragraph".into(), NodeSpec {
+                    content: Some("text*".into()),
+                    group: Some("block".into()),
+                    ..Default::default()
+                }),
+                ("text".into(), NodeSpec { inline: true, is_text: true, ..Default::default() }),
+            ],
+            marks: vec![
+                ("bold".into(), MarkSpec { rank: 0, ..Default::default() }),
+            ],
+        };
+        let schema = Schema::new(spec).expect("schema build should succeed");
+        assert!(schema.nodes.contains_key("doc"));
+        assert!(schema.nodes.contains_key("paragraph"));
+        assert!(schema.nodes.contains_key("text"));
+        assert!(schema.marks.contains_key("bold"));
+        assert_eq!(schema.top_node_type.name, "doc");
+    }
+
+    #[test]
+    fn schema_new_empty_nodes_fails() {
+        let spec = SchemaSpec { nodes: vec![], marks: vec![] };
+        assert!(Schema::new(spec).is_err());
+    }
+
+    #[test]
+    fn schema_same_type_ptr_eq() {
+        let spec = SchemaSpec {
+            nodes: vec![
+                ("doc".into(), NodeSpec { content: Some("paragraph+".into()), ..Default::default() }),
+                ("paragraph".into(), NodeSpec { group: Some("block".into()), ..Default::default() }),
+            ],
+            marks: vec![],
+        };
+        let schema = Schema::new(spec).unwrap();
+        let p1 = schema.nodes.get("paragraph").unwrap();
+        let p2 = schema.nodes.get("paragraph").unwrap();
+        assert!(Arc::ptr_eq(p1, p2), "同名类型应是同一 Arc 实例");
     }
 }

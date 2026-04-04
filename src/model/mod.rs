@@ -1,4 +1,5 @@
 mod comparedeep;
+mod tests_ts;
 mod schema;
 mod mark;
 mod content;
@@ -22,3 +23,5 @@ pub enum AttrValue {
 
 /// 节点或标记的属性集合。
 pub type Attrs = BTreeMap<String, AttrValue>;
+
+pub use schema::{Schema, SchemaSpec, NodeSpec, MarkSpec, SchemaError};
