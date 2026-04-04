@@ -9,8 +9,11 @@ use super::Attrs;
 /// Schema 构建错误
 #[derive(Debug, Clone)]
 pub enum SchemaError {
+    /// 节点列表为空，Schema 必须至少有一个节点类型
     EmptyNodes,
+    /// content 表达式解析失败
     ContentParseError(String),
+    /// 引用了未知的 mark 类型名称
     UnknownMarkRef(String),
 }
 
@@ -51,9 +54,11 @@ pub struct MarkSpec {
 }
 
 /// Schema 构建规格
+#[derive(Debug, Clone)]
 pub struct SchemaSpec {
     /// 有序节点列表；第一个为 topNode
     pub nodes: Vec<(String, NodeSpec)>,
+    /// 有序 mark 列表
     pub marks: Vec<(String, MarkSpec)>,
 }
 
