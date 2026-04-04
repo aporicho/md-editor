@@ -210,9 +210,9 @@ pub struct MarkType {
 
 impl MarkType {
     /// 检查此标记类型是否排斥另一个标记类型。
-    /// 使用 ptr_eq 比较（MarkType 在 Schema 重建后保持一致的 Arc 实例）。
+    /// Schema 构建的实例用 ptr_eq；测试中独立构造的实例用 name 兜底。
     pub fn excludes(&self, other: &Arc<MarkType>) -> bool {
-        self.excluded.iter().any(|e| Arc::ptr_eq(e, other))
+        self.excluded.iter().any(|e| Arc::ptr_eq(e, other) || e.name == other.name)
     }
 }
 

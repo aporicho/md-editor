@@ -1166,23 +1166,17 @@ fn mk_attrs(mt: Arc<MarkType>, attrs: Vec<(&str, &str)>) -> Mark {
 // 实际 rank 顺序来自 prosemirror-test-builder schema：link=0, em=1, strong=2, code=3
 fn em_mt()     -> Arc<MarkType> { make_mt("em",     1) }
 fn strong_mt() -> Arc<MarkType> { make_mt("strong", 2) }
-fn link_mt()   -> Arc<MarkType> {
-    // link 默认排斥自身（同类型标记互相替换）。
-    // 先建 excluded=[] 的 Arc（rc=1），用 get_mut 将自身 clone 写入 excluded（rc→2），
-    // 从而 excluded[0] 与返回值 ptr_eq 成立。
-    // 技巧：into_raw 取裸指针（不减 rc），decrement_strong_count 手动减回 1，
-    //        get_mut 成功后 from_raw 恢复 Arc 并 push。
-    let mut arc = Arc::new(MarkType {
+fn link_mt() -> Arc<MarkType> {
+    // link 排斥同名类型（自排斥）。用同名哨兵实例填入 excluded；
+    // MarkType::excludes 的 name 兜底比较保证测试正确性，无需循环引用。
+    let sentinel = Arc::new(MarkType {
         name: "link".into(), rank: 0, excluded: vec![], inclusive: None,
     });
-    // SAFETY: raw 来自合法 Arc，rc=2→1→2 全程有效，不存在悬垂指针。
-    let raw: *const MarkType = Arc::into_raw(Arc::clone(&arc)); // rc = 2
-    unsafe { Arc::decrement_strong_count(raw); }                // rc = 1
-    Arc::get_mut(&mut arc).unwrap().excluded.push(
-        // SAFETY: rc = 1 → push 后 rc = 2
-        unsafe { Arc::from_raw({ Arc::increment_strong_count(raw); raw }) }
-    );
-    arc
+    Arc::new(MarkType {
+        name: "link".into(), rank: 0,
+        excluded: vec![sentinel],
+        inclusive: None,
+    })
 }
 fn code_mt()   -> Arc<MarkType> { make_mt("code",   3) }
 
