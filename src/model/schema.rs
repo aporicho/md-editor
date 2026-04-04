@@ -315,6 +315,11 @@ impl Schema {
         // ── 第三遍：填充 inline_content / content_match / mark_set ──
         // ContentMatch::parse 内部会 Arc::clone NodeType，使引用计数 > 1，
         // 无法用 Arc::get_mut；改为重建整个 NodeType Arc 并替换 HashMap 中的旧值。
+        //
+        // 注意：重建后 schema.nodes 中的 NodeType Arc 与 ContentMatch DFA 内
+        // MatchEdge 持有的 Arc 是不同实例，ptr_eq 会为 false。
+        // 因此 ContentMatch::match_type / compatible 必须继续使用 name 字符串比较，
+        // 不能改为 ptr_eq。ptr_eq 只对 MarkType（excluded / mark_set）有效。
         let mark_sets: Vec<(String, Option<Vec<Arc<MarkType>>>)> = spec.nodes.iter()
             .map(|(name, ns)| {
                 let ms = Self::resolve_mark_set(&ns.marks, &mark_types)?;
