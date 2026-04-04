@@ -1,6 +1,46 @@
 # Rust ProseMirror 移植指南
 
-本文档是所有模块重写的参考基准。每个模块开始前必须阅读。
+**每个模块开始前必须阅读本文档。**
+
+---
+
+## 目标
+
+将 ProseMirror 编辑器生态（TypeScript）完整重写为 Rust，支撑基于 Iced + comit-text 渲染的 Markdown 编辑器。功能范围对齐 ProseMirror 全部库，包含协同编辑。
+
+---
+
+## 原则
+
+### 1. Rust 惯用，而非 TS 直译
+
+不追求与 TypeScript API 一字不差地对应。每个设计决策以"在 Rust 里最自然、最安全"为准。宁可调用方式稍有不同，也不引入 unsafe 或结构性缺陷。
+
+### 2. 无 unsafe
+
+整个代码库不使用 `unsafe`。如果某个设计需要 unsafe 才能实现，说明设计本身有问题，应当重新设计数据结构。
+
+### 3. 无循环引用
+
+类型之间不允许 `Arc` 循环引用。如果发现循环，通过存名字（`String`）或使用 `Weak` 来打破，而不是用 `unsafe` 绕过。
+
+### 4. 不可变优先
+
+文档数据（`Node`、`Fragment`、`Slice` 等）构建后不可变，修改通过创建新值实现，与 ProseMirror 的不可变文档模型一致。
+
+### 5. 功能完整，测试覆盖
+
+每个 TS 测试文件都要有对应的 Rust 测试。移植不算完成，除非对应的测试全部通过。
+
+### 6. API 一对一还原，不多不少
+
+ProseMirror 每个公开类的每个公开方法和属性，都必须在 Rust 中有对应实现，一个不多，一个不少。调用方式可以符合 Rust 习惯（如 `snake_case`、`Option` 替代 `null`），但功能和语义必须完全对齐。不允许以"Rust 不方便实现"为由跳过某个方法，也不允许擅自增加 ProseMirror 没有的方法。
+
+公开 API 的参照来源：`reference/prosemirror-*/src/index.ts` 列出的所有导出类型。
+
+### 7. 模块顺序不能跳
+
+`model` → `transform` → `state` → `history/commands/keymap/markdown`，严格按依赖顺序，不超前实现。
 
 ---
 
