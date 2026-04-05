@@ -523,13 +523,23 @@ impl MarkType {
 
     // ---- Phase 3 stubs (依赖 Mark) ----
 
-    /// Create a mark of this type. `attrs` may be `null` or an object
-    /// containing only some of the mark's attributes.
+    /// Create a mark of this type. `attrs` may be `None` or a map containing
+    /// only some of the mark's attributes. The others, if they have defaults,
+    /// will be added.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn create_stub(&self) -> ! {
-        todo!("MarkType::create requires Mark — implement in Phase 3")
+    /// Create a mark of this type. `attrs` may be `null` or an object
+    /// containing only some of the mark's attributes. The others, if
+    /// they have defaults, will be added.
+    pub fn create(
+        &self,
+        arc_self: &Arc<Self>,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::model::mark::Mark, crate::model::errors::SchemaError> {
+        let attrs = compute_attrs(&self.spec.attrs, attrs)?;
+        Ok(crate::model::mark::Mark {
+            mark_type: arc_self.clone(),
+            attrs,
+        })
     }
 
     /// When there is a mark of this type in the given set, a new set

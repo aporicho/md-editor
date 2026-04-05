@@ -6,3 +6,6 @@ pub mod compare_deep;
 pub mod render_output;
 pub mod schema;
 pub mod content;
+pub mod mark;
+#[cfg(test)]
+mod tests_mark;
