@@ -9,7 +9,7 @@
 ## 阶段总览
 
 ```
-Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 → Phase 3.3 → Phase 3.4 → Phase 4 → Phase 5
+Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 → Phase 3.3 → Phase 3.4 → Phase 4.1 → Phase 4.2 → Phase 4.3 → Phase 4.4 → Phase 4.5 → Phase 4.6 → Phase 4.7 → Phase 5
 ```
 
 | 阶段 | 名称 | 文件 | 前置依赖 | 状态 |
@@ -22,8 +22,14 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 3.2 | Fragment + Node 基础 + diff | fragment.rs, node.rs（基础 struct + nodeSize）, diff.rs + tests_diff.rs | Phase 3.1 | ⬜ 待开始 |
 | Phase 3.3 | Fragment + Node 完整方法 | fragment.rs 续, node.rs 续 + tests_node.rs | Phase 3.2 | ⬜ 待开始 |
 | Phase 3.4 | ContentMatch 完整 + tests_content | content.rs 续（match_fragment, fill_before, find_wrapping）+ tests_content.rs | Phase 3.3 | ⬜ 待开始 |
-| Phase 4 | 导航与替换 | resolved_pos.rs, replace.rs + tests | Phase 3.4 | ⬜ 待开始 |
-| Phase 5 | 渲染 Stub 与导出 | dom_parser.rs, dom_serializer.rs, mod.rs | Phase 4 | ⬜ 待开始 |
+| Phase 4.1 | Slice | replace.rs（Slice struct + 所有方法）+ tests_slice.rs | Phase 3.4 | ⬜ 待开始 |
+| Phase 4.2 | ResolvedPos struct + resolve 算法 | resolved_pos.rs（struct + resolve + resolve_no_cache）+ 基础测试 | Phase 3.4 | ⬜ 待开始 |
+| Phase 4.3 | ResolvedPos 简单访问器 | resolved_pos.rs 续（node/index/start/end/before/after/text_offset/node_after/node_before/pos_at_index） | Phase 4.2 | ⬜ 待开始 |
+| Phase 4.4 | ResolvedPos 复杂方法 + NodeRange | resolved_pos.rs 续（marks/marks_across/block_range/shared_depth/same_parent/max/min）+ NodeRange + tests_resolve.rs | Phase 4.3 | ⬜ 待开始 |
+| Phase 4.5 | replace 内部辅助函数 | replace.rs 续（remove_range/insert_into/add_node/add_range/close/check_join/prepare_slice_for_replace 等私有函数） | Phase 4.1 + Phase 4.4 | ⬜ 待开始 |
+| Phase 4.6 | replace 算法积木块 | replace.rs 续（replace_two_way/replace_three_way） | Phase 4.5 | ⬜ 待开始 |
+| Phase 4.7 | replace 主算法 + Node 方法补全 | replace.rs 续（replace_outer/replace）+ node.rs 补全（Node::replace/Node::slice）+ tests_replace.rs | Phase 4.6 | ⬜ 待开始 |
+| Phase 5 | 渲染 Stub 与导出 | dom_parser.rs, dom_serializer.rs, mod.rs | Phase 4.7 | ⬜ 待开始 |
 
 ---
 
@@ -125,17 +131,87 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 
 ---
 
-## Phase 4：导航与替换
+## Phase 4.1：Slice
 
-**文件：**
-- `src/model/resolved_pos.rs` — ResolvedPos, NodeRange + `src/model/tests_resolve.rs`
-- `src/model/replace.rs` — Slice, replace 算法 + `src/model/tests_replace.rs` + `src/model/tests_slice.rs`
+**文件：** `src/model/replace.rs`（Slice 部分）+ `src/model/tests_slice.rs`
 
-**产出：** 可解析文档位置，可执行 slice/replace 操作，所有相关测试通过。
+**范围：** Slice struct（content/open_start/open_end）、size、eq、to_string、to_json、from_json、max_open、empty 常量、insert_at、remove_between
 
-**依赖：** Phase 3。
+**产出：** Slice 可构建，tests_slice.rs 全部通过。
 
-**详细计划：** `docs/superpowers/plans/model-phase4-plan.md`
+**依赖：** Phase 3.4（Fragment）
+
+---
+
+## Phase 4.2：ResolvedPos struct + resolve 算法
+
+**文件：** `src/model/resolved_pos.rs`（核心部分）
+
+**范围：** ResolvedPos struct 定义、`resolve()` 静态方法（路径解析算法）、`resolve_no_cache()`、基础测试验证 resolve 正确。
+
+**产出：** 给定文档和位置，可正确构建 ResolvedPos 路径。
+
+**依赖：** Phase 3.4（Node/Fragment）
+
+---
+
+## Phase 4.3：ResolvedPos 简单访问器
+
+**文件：** `src/model/resolved_pos.rs`（续）
+
+**范围：** depth、parent、doc、node、index、index_after、start、end、before、after、text_offset、node_after、node_before、pos_at_index
+
+**产出：** 所有基础访问器可用，基础导航测试通过。
+
+**依赖：** Phase 4.2
+
+---
+
+## Phase 4.4：ResolvedPos 复杂方法 + NodeRange
+
+**文件：** `src/model/resolved_pos.rs`（续）
+
+**范围：** marks、marks_across、shared_depth、block_range、same_parent、max、min；NodeRange struct（from/to/depth）及所有方法（start/end/parent/start_index/end_index）；tests_resolve.rs 完整测试。
+
+**产出：** ResolvedPos 和 NodeRange 全部完整，tests_resolve.rs 全部通过。
+
+**依赖：** Phase 4.3
+
+---
+
+## Phase 4.5：replace 内部辅助函数
+
+**文件：** `src/model/replace.rs`（replace 算法部分）
+
+**范围：** 所有私有辅助函数：remove_range、insert_into、add_node、add_range、close、check_join、joinable、prepare_slice_for_replace、content_between 等。无独立测试，由 Phase 4.7 集成测试覆盖。
+
+**产出：** 所有辅助函数实现完毕，可编译通过。
+
+**依赖：** Phase 4.1（Slice）+ Phase 4.4（ResolvedPos）
+
+---
+
+## Phase 4.6：replace 算法积木块
+
+**文件：** `src/model/replace.rs`（续）
+
+**范围：** replace_two_way、replace_three_way（两个核心递归函数，是 replace_outer 的构建基础）。
+
+**产出：** 两个算法函数实现完毕，可编译通过。
+
+**依赖：** Phase 4.5
+
+---
+
+## Phase 4.7：replace 主算法 + Node 方法补全
+
+**文件：** `src/model/replace.rs`（续）+ `src/model/node.rs`（补全）
+
+**范围：** replace_outer、replace（公开入口）；node.rs 补全 Node::replace、Node::slice；tests_replace.rs 完整测试。
+
+**产出：** replace 算法完整，Node::replace/Node::slice 可用，tests_replace.rs 全部通过。
+
+**依赖：** Phase 4.6
 
 ---
 
