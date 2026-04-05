@@ -607,6 +607,79 @@ fn fill_before_search(
     None
 }
 
+/// BFS 辅助函数：计算从 match_state 出发，让 target 类型能出现所需的最短包裹链。
+///
+/// - 返回 `Some(vec![])` 若 match_state 直接接受 target（无需包裹）。
+/// - 返回 `Some(vec!["type1", "type2", ...])` 若需要包裹。
+/// - 返回 `None` 若无法包裹。
+///
+/// BFS 对应 TS 的 computeWrapping 方法。
+fn compute_wrapping(
+    match_state: &Arc<ContentMatch>,
+    target: &str,
+) -> Option<Vec<String>> {
+    struct Active {
+        match_state: Arc<ContentMatch>,
+        type_name: Option<String>,
+        via: Option<usize>,
+    }
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut active: Vec<Active> = vec![Active {
+        match_state: match_state.clone(),
+        type_name: None,
+        via: None,
+    }];
+    let mut head = 0usize;
+
+    while head < active.len() {
+        let current_match = active[head].match_state.clone();
+        let has_type = active[head].type_name.is_some(); // 已进入至少一层包裹
+
+        // 检查当前 match_state 是否直接接受 target
+        if current_match.match_type(target).is_some() {
+            // 沿 via 链回溯，收集包裹类型名，再 reverse
+            let mut result: Vec<String> = Vec::new();
+            let mut idx = head;
+            while let Some(type_name) = &active[idx].type_name {
+                result.push(type_name.clone());
+                // via 指向父 Active 的索引
+                match active[idx].via {
+                    Some(via_idx) => idx = via_idx,
+                    None => break,
+                }
+            }
+            result.reverse();
+            return Some(result);
+        }
+
+        // 探索当前 match_state 的出边
+        let edges = current_match.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        for (weak_nt, next_state) in edges {
+            if let Some(nt) = weak_nt.upgrade() {
+                // 跳过：叶节点 / 有必填属性 / 已见过 / 违反可关闭约束
+                // (!current.type || next.validEnd): 若已在包裹内，要求本层能正常结束
+                if !nt.is_leaf()
+                    && !nt.has_required_attrs()
+                    && !seen.contains(nt.name.as_str())
+                    && (!has_type || next_state.valid_end)
+                {
+                    seen.insert(nt.name.clone());
+                    let child_match = nt.content_match.clone();
+                    active.push(Active {
+                        match_state: child_match,
+                        type_name: Some(nt.name.clone()),
+                        via: Some(head),
+                    });
+                }
+            }
+        }
+
+        head += 1;
+    }
+    None
+}
+
 /// Represents a match state of a node type's content expression.
 ///
 /// Instances of this class represent a match state of a node type's
@@ -769,7 +842,20 @@ impl ContentMatch {
         self: &Arc<Self>,
         target: &str,
     ) -> Option<Vec<String>> {
-        todo!("find_wrapping: implement in Phase 3.4-c")
+        // 先查缓存
+        {
+            let cache = self.wrap_cache.lock().unwrap();
+            if let Some(cached) = cache.get(target) {
+                return cached.clone();
+            }
+        }
+        // 计算并写入缓存
+        let result = compute_wrapping(self, target);
+        {
+            let mut cache = self.wrap_cache.lock().unwrap();
+            cache.insert(target.to_string(), result.clone());
+        }
+        result
     }
 }
 
