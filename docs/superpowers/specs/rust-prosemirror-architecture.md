@@ -4,6 +4,8 @@
 
 > **注意：本文档仅供快速定位和整体理解，内容可能不完整或过时。实现时必须以 `reference/prosemirror-*/src/` 中的 TypeScript 源码为准，所有细节、边界情况、参数类型请直接查阅原始代码。**
 
+> **工作流程：** 每个模块先做 Brainstorming（设计决策）→ 创建阶段计划（`docs/superpowers/plans/{module}-phases.md`）→ 逐阶段用 writing-plans 生成详细计划并执行。详见移植指南的"工作流程"章节。
+
 ---
 
 ## 模块依赖图

@@ -57,6 +57,35 @@ ProseMirror 每个公开类的每个公开方法和属性，都必须在 Rust �
 
 ---
 
+## 工作流程
+
+每个模块按以下流程推进，**不允许跳步**：
+
+### 步骤 1：Brainstorming（设计决策）
+用 `/brainstorming` 技能对本模块做设计决策。产出：
+- 模块设计文档 `docs/superpowers/specs/YYYY-MM-DD-{module}-design.md`
+
+### 步骤 2：阶段计划（Phase Plan）
+创建模块阶段计划文档 `docs/superpowers/plans/{module}-phases.md`，将模块拆分为 3-6 个阶段，每个阶段：
+- 范围：涉及哪些文件
+- 依赖：需要哪些前置阶段完成
+- 产出：可独立编译并通过测试的代码
+
+格式见 `docs/superpowers/plans/model-phases.md`（示例）。
+
+### 步骤 3：逐阶段实现
+对每个阶段，用 `/writing-plans` 技能生成详细实现计划，然后用 `subagent-driven-development` 或 `executing-plans` 执行。
+
+每个阶段的详细计划保存到：
+`docs/superpowers/plans/{module}-phase{N}-plan.md`
+
+### 原则
+- 阶段计划（Phase Plan）：高层，列出阶段和范围，不写代码
+- 详细实现计划（writing-plans 产出）：低层，每个步骤有完整代码
+- 每个阶段完成后才能开始下一个阶段
+
+---
+
 ## 项目背景
 
 将 ProseMirror 编辑器生态（TypeScript）重写为 Rust，服务于 Iced + comit-text 渲染的 Markdown 编辑器。包含全部功能，含协同编辑。
