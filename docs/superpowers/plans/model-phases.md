@@ -26,7 +26,7 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 3.4-a | match_fragment + valid_content | content.rs（match_fragment）+ schema.rs（NodeType::valid_content）+ 架构决策：fill_before/find_wrapping 增加 schema 参数 | Phase 3.3-c | ✅ 完成 |
 | Phase 3.4-b | fill_before + create_and_fill | content.rs（fill_before）+ schema.rs（NodeType::create_and_fill）+ tests_content.rs fill 系列（28 个测试） | Phase 3.4-a | ⬜ 待开始 |
 | Phase 3.4-c | find_wrapping + Node 方法补全 | content.rs（find_wrapping）+ node.rs（check/content_match_at/can_replace/can_replace_with/can_append）+ tests_content.rs matchType 系列 + 4 个 check 测试 | Phase 3.4-b | ⬜ 待开始 |
-| Phase 4.1 | Slice | replace.rs（Slice struct + 所有方法）+ tests_slice.rs | Phase 3.4-c | ⬜ 待开始 |
+| Phase 4.1 | Slice | replace.rs（Slice struct + 所有方法）+ tests_slice.rs | Phase 3.4-c | ✅ 完成 |
 | Phase 4.2 | ResolvedPos struct + resolve 算法 | resolved_pos.rs（struct + resolve + resolve_no_cache）+ 基础测试 | Phase 3.4 | ⬜ 待开始 |
 | Phase 4.3 | ResolvedPos 简单访问器 | resolved_pos.rs 续（node/index/start/end/before/after/text_offset/node_after/node_before/pos_at_index） | Phase 4.2 | ⬜ 待开始 |
 | Phase 4.4 | ResolvedPos 复杂方法 + NodeRange | resolved_pos.rs 续（marks/marks_across/block_range/shared_depth/same_parent/max/min）+ NodeRange + tests_resolve.rs | Phase 4.3 | ⬜ 待开始 |
