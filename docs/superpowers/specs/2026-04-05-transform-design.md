@@ -188,6 +188,71 @@ pub struct ChangedRange {
 // 返回 Option<ChangedRange>
 ```
 
+### 决策 11：`addMark` 积累元组，不修改已创建的 Step
+
+TS 里 `addMark` 靠 `(removing as any).to = end` 绕过 `readonly` 限制直接修改已创建的 Step 对象，扩展其范围。这是 TS 特有的 hack，Rust 的不可变原则不允许这种写法。
+
+Rust 里先积累 `(start, end, mark)` 元组，最后批量创建 Step：
+
+```rust
+let mut to_remove: Vec<(usize, usize, Mark)> = vec![];
+let mut to_add: Vec<(usize, usize, Mark)> = vec![];
+// 遍历时只积累范围，不创建 Step
+// 遍历完成后统一创建并应用
+for (start, end, mark) in to_remove {
+    tr.step(Box::new(RemoveMarkStep::new(start, end, mark)));
+}
+```
+
+### 决策 12：`StepResult::from_replace` 用 `match` 替代 try/catch
+
+TS 里用 try/catch 捕获 `ReplaceError`，其他异常继续抛出。Rust 里 `replace` 返回 `Result`，直接 match，不会误吞其他错误：
+
+```rust
+pub fn from_replace(doc: &Arc<Node>, from: usize, to: usize, slice: Slice) -> Self {
+    match doc.replace(from, to, slice) {
+        Ok(new_doc) => StepResult::ok(new_doc),
+        Err(e) => StepResult::fail(e.to_string()),
+    }
+}
+```
+
+### 决策 13：`_map` 拆成两个方法
+
+TS 里 `_map(pos, assoc, simple: boolean)` 用 bool 控制返回 `number` 或 `MapResult`，靠动态类型逃脱类型检查。Rust 类型系统不允许同一函数返回不同类型，拆成两个方法：
+
+- `map(&self, pos: usize, assoc: i8) -> usize`
+- `map_result(&self, pos: usize, assoc: i8) -> MapResult`
+
+### 决策 14：`Fittable` 可选字段用 `Option`
+
+TS 里 `Fittable` 接口的 `inject?` 和 `wrap?` 是可选字段。Rust 里直接对应：
+
+```rust
+struct Fittable {
+    slice_depth: usize,
+    frontier_depth: usize,
+    parent: Option<Arc<Node>>,
+    inject: Option<Fragment>,
+    wrap: Option<Vec<Arc<NodeType>>>,
+}
+```
+
+### 决策 15：`MAP_BIAS` 用 `AtomicI8`，保留运行时可配置
+
+TS 里 `ReplaceStep.MAP_BIAS` 是静态可变字段，控制协同编辑时插入位置映射的偏向（前面还是后面）。项目最终要支持协同编辑，这个字段不是历史遗留，是真实需求。
+
+Rust 里用 `AtomicI8` 实现全局可配置，线程安全，无需 `Mutex`：
+
+```rust
+static MAP_BIAS: AtomicI8 = AtomicI8::new(1);
+
+// 读取
+let bias = MAP_BIAS.load(Ordering::Relaxed);
+// 设置（协同编辑场景下可切换为 -1）
+MAP_BIAS.store(-1, Ordering::Relaxed);
+```
+
 ---
 
 ## 文件结构
