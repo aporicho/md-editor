@@ -94,4 +94,15 @@ impl ResolvedPos {
         }
         Ok(ResolvedPos::new(pos, path, parent_offset))
     }
+
+    /// Resolve a position in a document tree.
+    ///
+    /// Phase 4.2 simply delegates to [`resolve_no_cache`]. TS's
+    /// `ResolvedPos.resolveCached` uses a `WeakMap<Node, ResolveCache>`
+    /// which requires document-node identity via `Arc` sharing. Rust's
+    /// current `Node` is `Clone` by value, so the identity-cache
+    /// optimization is deferred to Phase 4.7+ (Decision 32).
+    pub fn resolve(doc: &Node, pos: usize) -> Result<ResolvedPos, RangeError> {
+        ResolvedPos::resolve_no_cache(doc, pos)
+    }
 }

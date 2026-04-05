@@ -209,3 +209,57 @@ fn resolve_no_cache_pos_twelve_at_doc_end() {
     assert_eq!(rp.path[0].index, 2); // 在 blockquote 之后
     assert_eq!(rp.path[0].start_pos, 12);
 }
+
+#[test]
+fn resolve_out_of_range_errors() {
+    let d = test_doc();
+    // doc.content.size = 12,超过 12 应报错
+    let err = ResolvedPos::resolve(&d, 13).err().unwrap();
+    assert!(err.0.contains("Position 13 out of range"));
+}
+
+#[test]
+fn resolve_pos_at_exact_size_is_valid() {
+    let d = test_doc();
+    // pos == doc.content.size 是合法的(在 doc 末尾)
+    let rp = ResolvedPos::resolve(&d, 12).unwrap();
+    assert_eq!(rp.pos, 12);
+    assert_eq!(rp.depth, 0);
+}
+
+#[test]
+fn resolve_delegates_to_resolve_no_cache() {
+    let d = test_doc();
+    // resolve 应返回与 resolve_no_cache 结构相同的 ResolvedPos
+    let r_cached = ResolvedPos::resolve(&d, 7).unwrap();
+    let r_nocache = ResolvedPos::resolve_no_cache(&d, 7).unwrap();
+    assert_eq!(r_cached.pos, r_nocache.pos);
+    assert_eq!(r_cached.depth, r_nocache.depth);
+    assert_eq!(r_cached.parent_offset, r_nocache.parent_offset);
+    assert_eq!(r_cached.path.len(), r_nocache.path.len());
+    for i in 0..r_cached.path.len() {
+        assert_eq!(r_cached.path[i].node.node_type.name, r_nocache.path[i].node.node_type.name);
+        assert_eq!(r_cached.path[i].index, r_nocache.path[i].index);
+        assert_eq!(r_cached.path[i].start_pos, r_nocache.path[i].start_pos);
+    }
+}
+
+#[test]
+fn resolve_in_empty_doc() {
+    // doc 内部必须至少有一个 block(schema 要求 block+),用最小的 doc
+    let d = doc(&[p(&[])]);
+    // p() 空段落 size = 2,doc.size = 2
+    // pos=0: 在 doc 层 offset 0,rem=0 break ⇒ depth=0
+    let rp = ResolvedPos::resolve(&d, 0).unwrap();
+    assert_eq!(rp.depth, 0);
+    assert_eq!(rp.parent_offset, 0);
+    // pos=1: 进入 p,parentOffset=0,p.content.size=0 ⇒ find_index(0)=(0,0), rem=0 break
+    let rp = ResolvedPos::resolve(&d, 1).unwrap();
+    assert_eq!(rp.depth, 1);
+    assert_eq!(rp.parent_offset, 0);
+    assert_eq!(rp.path[1].node.node_type.name, "paragraph");
+    // pos=2: 在 doc 末尾
+    let rp = ResolvedPos::resolve(&d, 2).unwrap();
+    assert_eq!(rp.depth, 0);
+    assert_eq!(rp.parent_offset, 2);
+}
