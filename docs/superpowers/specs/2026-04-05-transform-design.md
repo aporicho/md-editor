@@ -358,6 +358,49 @@ pub trait Step: Any + Send + Sync {
 
 注册时用 `step.json_id()`，序列化时也用 `self.json_id()`，一处定义，全局一致。
 
+### 决策 23：`#[track_caller]` 辅助 Poison 模式调试
+
+Poison 模式失败后继续执行，最后才报错，默认难以定位是哪一步出了问题。加 `#[track_caller]` 记录失败位置，零架构改动：
+
+```rust
+#[track_caller]
+pub fn step(&mut self, step: Box<dyn Step>) -> &mut Self {
+    if self.error.is_some() { return self; }
+    if let Err(e) = self.maybe_step(step) {
+        self.error = Some(e);
+    }
+    self
+}
+```
+
+debug 模式可选直接 panic 暴露完整调用栈，release 模式保持 poison 行为。
+
+### 决策 24：为 `MarkFilter` 实现 `From` trait，保持调用方体验
+
+`MarkFilter` 枚举让调用方必须写 `MarkFilter::Specific(mark)`，比 TS 繁琐。实现 `From` trait 后调用方可直接传值：
+
+```rust
+impl From<Mark> for MarkFilter {
+    fn from(mark: Mark) -> Self { MarkFilter::Specific(mark) }
+}
+impl From<Arc<MarkType>> for MarkFilter {
+    fn from(t: Arc<MarkType>) -> Self { MarkFilter::ByType(t) }
+}
+```
+
+调用方直接传 `mark` 或 `mark_type`，类型推断自动转换，和 TS 体验一致。
+
+### 说明：Arena 分配和混合 Step 方案有意不采用
+
+理论上 Arena 分配可以消除 `Arc<Node>` 的引用计数开销，混合 Step 方案（内置枚举+自定义 trait）可以消除动态分发开销。但对于 Markdown 编辑器：
+
+- 文档树规模小（通常几千节点），Arc 开销可忽略
+- transform 操作响应用户输入，频率低于 100 次/秒，动态分发开销是纳秒级
+- 性能瓶颈在渲染层（cosmic-text），不在文档操作
+- 两种方案都会显著提升架构复杂度
+
+**决定：** 保持当前 Arc + trait object 方案，等性能测试发现实际瓶颈后再针对性优化。
+
 ---
 
 ## 文件结构
