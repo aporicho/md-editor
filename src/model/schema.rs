@@ -496,6 +496,64 @@ impl NodeType {
     }
 }
 
+impl MarkType {
+    /// Queries whether a given mark type is excluded by this one.
+    ///
+    /// Queries whether a given mark type is
+    /// [excluded](#model.MarkSpec.excludes) by this one.
+    pub fn excludes(&self, other: &MarkType) -> bool {
+        self.excluded.excludes(&self.name, &other.name)
+    }
+
+    /// Tells you whether this mark type has any required attributes.
+    pub fn has_required_attrs(&self) -> bool {
+        self.spec.attrs.values().any(|a| a.is_required())
+    }
+
+    /// Compute attributes, merging provided values with spec defaults.
+    ///
+    /// @internal
+    pub(crate) fn compute_attrs_for(
+        &self,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<Attrs, crate::model::errors::SchemaError> {
+        if attrs.is_none() {
+            if let Some(defaults) = &self.default_attrs {
+                return Ok(defaults.clone());
+            }
+        }
+        compute_attrs(&self.spec.attrs, attrs)
+    }
+
+    // ---- Phase 3 stubs (依赖 Mark) ----
+
+    /// Create a mark of this type. `attrs` may be `null` or an object
+    /// containing only some of the mark's attributes.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn create_stub(&self) -> ! {
+        todo!("MarkType::create requires Mark — implement in Phase 3")
+    }
+
+    /// When there is a mark of this type in the given set, a new set
+    /// without it is returned. Otherwise, the input set is returned.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn remove_from_set_stub(&self) -> ! {
+        todo!("MarkType::remove_from_set requires Mark — implement in Phase 3")
+    }
+
+    /// Tests whether there is a mark of this type in the given set.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn is_in_set_stub(&self) -> ! {
+        todo!("MarkType::is_in_set requires Mark — implement in Phase 3")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,6 +961,91 @@ mod tests {
         vals.insert("level".to_string(), json!(3));
         let result2 = p.compute_attrs_for(Some(&vals)).unwrap();
         assert_eq!(result2.get("level"), Some(&json!(3)));
+    }
+
+    // ---- MarkType 测试 ----
+
+    fn make_em_marktype() -> MarkType {
+        MarkType {
+            name: "em".to_string(),
+            rank: 0,
+            inclusive: true,
+            excluded: ExcludeSpec::SelfOnly,
+            spec: MarkSpec::default(),
+            default_attrs: None,
+        }
+    }
+
+    fn make_strong_marktype() -> MarkType {
+        MarkType {
+            name: "strong".to_string(),
+            rank: 1,
+            inclusive: true,
+            excluded: ExcludeSpec::SelfOnly,
+            spec: MarkSpec::default(),
+            default_attrs: None,
+        }
+    }
+
+    #[test]
+    fn marktype_excludes_self_only_same_name() {
+        let em = make_em_marktype();
+        assert!(em.excludes(&em));
+    }
+
+    #[test]
+    fn marktype_excludes_self_only_different_name() {
+        let em = make_em_marktype();
+        let strong = make_strong_marktype();
+        assert!(!em.excludes(&strong));
+    }
+
+    #[test]
+    fn marktype_excludes_all() {
+        let mt = MarkType {
+            excluded: ExcludeSpec::All,
+            ..make_em_marktype()
+        };
+        assert!(mt.excludes(&make_strong_marktype()));
+        assert!(mt.excludes(&make_em_marktype()));
+    }
+
+    #[test]
+    fn marktype_excludes_named_list() {
+        let mt = MarkType {
+            excluded: ExcludeSpec::Named(vec!["strong".to_string()]),
+            ..make_em_marktype()
+        };
+        assert!(mt.excludes(&make_strong_marktype()));
+        assert!(!mt.excludes(&make_em_marktype()));
+    }
+
+    #[test]
+    fn marktype_has_required_attrs_false_when_empty() {
+        let em = make_em_marktype();
+        assert!(!em.has_required_attrs());
+    }
+
+    #[test]
+    fn marktype_has_required_attrs_true_when_any_required() {
+        use indexmap::indexmap;
+        let mt = MarkType {
+            spec: MarkSpec {
+                attrs: indexmap! {
+                    "href".to_string() => AttrSpec { default: None, validate: None }
+                },
+                ..MarkSpec::default()
+            },
+            ..make_em_marktype()
+        };
+        assert!(mt.has_required_attrs());
+    }
+
+    #[test]
+    fn marktype_compute_attrs_for_empty_spec() {
+        let em = make_em_marktype();
+        let result = em.compute_attrs_for(None).unwrap();
+        assert!(result.is_empty());
     }
 }
 
