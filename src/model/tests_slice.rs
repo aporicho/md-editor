@@ -395,10 +395,10 @@ fn insert_at_top_level_unchecked_by_design() {
 #[test]
 fn insert_at_descends_into_child_and_checks_can_replace() {
     // content = Fragment[p("ab")] size=4, open=0/0
-    // 试图在 p 内部 pos=1(dist=1,offset=0)插入另一个 p 节点
-    // dist=1 落在 p 内部非文本分支?不,p 的子是 t("ab"),是文本
-    // 所以触发 "child.is_text() == true" 分支,会检查 parent.can_replace
-    // paragraph 不允许 paragraph 作为子 ⇒ 返回 None
+    // 顶层 pos=1(dist=1)落在 p 内部(offset=0 ≠ dist),触发递归分支
+    // 进入 p.content=Fragment[t("ab")],dist=0,此时 offset==dist ⇒ 扁平分支
+    // 传入 parent=Some(&p),检查 p.can_replace(0,0,Fragment[p("X")],0,1)
+    // paragraph 的 content=inline* 拒绝 block 子节点 ⇒ 返回 None
     let s = Slice::new(Fragment::from_node(p(&[t("ab")])), 0, 0);
     let insert = Fragment::from_node(p(&[t("X")]));
     let result = s.insert_at(1, &insert);
