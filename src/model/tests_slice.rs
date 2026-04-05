@@ -122,3 +122,76 @@ fn to_json_includes_both_open_fields() {
     assert_eq!(obj.get("openStart").and_then(|v| v.as_u64()), Some(2));
     assert_eq!(obj.get("openEnd").and_then(|v| v.as_u64()), Some(3));
 }
+
+use crate::model::test_builder::test_schema;
+use serde_json::{json, Value};
+
+#[test]
+fn from_json_null_returns_empty_slice() {
+    let s = test_schema();
+    let result = Slice::from_json(s, Some(&Value::Null)).unwrap();
+    assert!(result.eq(&Slice::empty()));
+}
+
+#[test]
+fn from_json_none_returns_empty_slice() {
+    let s = test_schema();
+    let result = Slice::from_json(s, None).unwrap();
+    assert!(result.eq(&Slice::empty()));
+}
+
+#[test]
+fn from_json_content_only_defaults_open_to_zero() {
+    let s = test_schema();
+    // 构造一个含 paragraph("hi") 的 slice 的 JSON
+    let original = Slice::new(Fragment::from_node(p(&[t("hi")])), 0, 0);
+    let json = original.to_json().unwrap();
+    let restored = Slice::from_json(s, Some(&json)).unwrap();
+    assert_eq!(restored.open_start, 0);
+    assert_eq!(restored.open_end, 0);
+    assert!(restored.eq(&original));
+}
+
+#[test]
+fn from_json_with_open_fields() {
+    let s = test_schema();
+    let original = Slice::new(Fragment::from_node(p(&[t("hi")])), 1, 2);
+    let json = original.to_json().unwrap();
+    let restored = Slice::from_json(s, Some(&json)).unwrap();
+    assert_eq!(restored.open_start, 1);
+    assert_eq!(restored.open_end, 2);
+    assert!(restored.eq(&original));
+}
+
+#[test]
+fn from_json_invalid_open_start_type_errors() {
+    let s = test_schema();
+    let json = json!({
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}],
+        "openStart": "oops",
+    });
+    let err = Slice::from_json(s, Some(&json)).err().unwrap();
+    assert!(err.0.contains("Invalid input for Slice.fromJSON"));
+}
+
+#[test]
+fn from_json_invalid_open_end_type_errors() {
+    let s = test_schema();
+    let json = json!({
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}],
+        "openEnd": [],
+    });
+    let err = Slice::from_json(s, Some(&json)).err().unwrap();
+    assert!(err.0.contains("Invalid input for Slice.fromJSON"));
+}
+
+#[test]
+fn from_json_roundtrip() {
+    let s = test_schema();
+    let d = doc(&[p(&[t("hello")]), p(&[t("world")])]);
+    let content = Fragment::from_node(d);
+    let original = Slice::new(content, 1, 1);
+    let json = original.to_json().unwrap();
+    let restored = Slice::from_json(s, Some(&json)).unwrap();
+    assert!(restored.eq(&original));
+}

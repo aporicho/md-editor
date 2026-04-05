@@ -7,9 +7,20 @@
 use std::sync::OnceLock;
 use serde_json::{Map, Value};
 
+use crate::model::errors::RangeError;
 use crate::model::fragment::Fragment;
+use crate::model::schema::Schema;
 
 static EMPTY_SLICE: OnceLock<Slice> = OnceLock::new();
+
+fn parse_open_field(value: Option<&Value>) -> Result<usize, RangeError> {
+    match value {
+        None | Some(Value::Null) => Ok(0),
+        Some(v) => v.as_u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| RangeError("Invalid input for Slice.fromJSON".to_string())),
+    }
+}
 
 /// A slice represents a piece cut out of a larger document. It
 /// stores not only a fragment, but also the depth up to which nodes on
@@ -80,5 +91,21 @@ impl Slice {
             obj.insert("openEnd".to_string(), Value::from(self.open_end as u64));
         }
         Some(Value::Object(obj))
+    }
+
+    /// Deserialize a slice from its JSON representation.
+    /// `None` or `Value::Null` ⇒ empty slice.
+    pub fn from_json(schema: &Schema, value: Option<&Value>) -> Result<Slice, RangeError> {
+        let Some(v) = value else { return Ok(Slice::empty()); };
+        if v.is_null() { return Ok(Slice::empty()); }
+        let obj = v.as_object().ok_or_else(|| {
+            RangeError("Invalid input for Slice.fromJSON".to_string())
+        })?;
+
+        let open_start = parse_open_field(obj.get("openStart"))?;
+        let open_end = parse_open_field(obj.get("openEnd"))?;
+
+        let content = Fragment::from_json(schema, obj.get("content"))?;
+        Ok(Slice::new(content, open_start, open_end))
     }
 }
