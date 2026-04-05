@@ -1,3 +1,5 @@
+#![allow(dead_code)] // TODO: Phase 2 完成后移除
+
 use serde_json::Value;
 
 /// Recursively compare two JSON values for deep equality.

@@ -253,6 +253,49 @@ let bias = MAP_BIAS.load(Ordering::Relaxed);
 MAP_BIAS.store(-1, Ordering::Relaxed);
 ```
 
+### 决策 16：`removeMark` 参数用 `MarkFilter` 枚举
+
+TS 里 `mark?: Mark | MarkType | null` 是联合类型，三种情况语义不同。Rust 里用枚举明确表达：
+
+```rust
+pub enum MarkFilter {
+    Specific(Mark),        // 删除特定 mark
+    ByType(Arc<MarkType>), // 删除某类型的所有 mark
+    All,                   // 删除全部 mark
+}
+```
+
+调用方意图一目了然，编译期强制穷举所有情况。
+
+### 决策 17：`Mapping.mirror` 改 `Vec<(usize, usize)>`
+
+TS 里 `mirror?: number[]` 将镜像对 `(n, m)` 压入平坦数组，靠"两个一组"的约定隐式配对。Rust 里直接用元组：
+
+```rust
+mirror: Option<Vec<(usize, usize)>>,
+```
+
+语义明确，`getMirror`/`setMirror` 的查找逻辑随之简化。
+
+### 决策 18：`changedRange()` 用 `Option` 累积，不用哨兵值
+
+TS 里用 `from = 1e9`、`to = -1e9` 作为"未初始化"哨兵，最后检查 `from == 1e9` 判断是否有变更。Rust 里用 `Option` 累积：
+
+```rust
+let mut range: Option<(usize, usize)> = None;
+range = Some(match range {
+    None => (from, to),
+    Some((f, t)) => (f.min(from), t.max(to)),
+});
+// 返回 Option<ChangedRange>
+```
+
+消除哨兵约定，不可能出现"忘记检查哨兵"的 bug。
+
+### 决策 19：`removeMark` 也用积累元组，不修改已有对象
+
+TS 里 `removeMark` 通过 `found.to = end` 直接修改 `matched` 数组里的对象扩展范围，和 `addMark` 是同一个问题。Rust 里同样积累 `(start, end, mark)` 元组，遍历完成后统一创建 Step，与决策 11 保持一致。
+
 ---
 
 ## 文件结构

@@ -379,6 +379,196 @@ pub use errors::{SchemaError, SyntaxError, RangeError};
 
 ---
 
+## Phase 3/4 设计决策（Fragment / Node / ResolvedPos）
+
+### 决策 9：ResolvedPos::path 用 struct 替代混合数组
+
+TS 的 `path: any[]` 将节点、序号、起始位置混合存入一个数组，靠 `path[depth * 3]`、`path[depth * 3 + 1]` 等手算偏移访问。这是 JS 为避免对象分配的性能 hack。
+
+Rust 里用有名字的 struct，栈上分配，零额外开销：
+
+```rust
+struct PathStep {
+    node: Arc<Node>,
+    index: usize,
+    start: usize,
+}
+// ResolvedPos.path: Vec<PathStep>
+```
+
+### 决策 10：Fragment 实现 Iterator，不用 forEach 回调
+
+TS 的 `forEach(f: (node, offset, index) => void)` 是回调风格。Rust 里实现 `iter()` 返回迭代器，调用方可以直接用 `map`、`filter`、`fold` 等标准迭代器方法，不需要学新 API。
+
+### 决策 11：Fragment::from() 用 From trait 替代运行时类型判断
+
+TS 的 `Fragment.from()` 在运行时用 `instanceof` 判断输入类型。Rust 里实现：
+
+```rust
+impl From<Node> for Fragment { ... }
+impl From<Vec<Node>> for Fragment { ... }
+```
+
+编译期确定类型，比运行时判断更安全。
+
+### 决策 12：findIndex 返回元组，不复用全局对象
+
+TS 里 `findIndex` 复用一个全局 `{index, offset}` 对象来避免堆分配。Rust 里直接返回 `(usize, usize)`，放在栈上，零开销，不需要这个 hack。
+
+### 决策 13：resolve_cached 有意不实现
+
+TS 用 `WeakMap<Node, ResolveCache>` 缓存 resolve 结果，依赖 GC 自动清理。Rust 没有对应机制，备选方案均存在较大代价：
+
+- **Node 内嵌缓存**：每个 Node 都带缓存，文档树有大量叶子节点永远不会被 resolve，内存浪费。
+- **引入独立 Doc 类型**：改动面覆盖全部 7 个模块（model/transform/state/history/commands/keymap/markdown），为性能优化引入大范围架构改动不合算。
+
+**决定：** Phase 4 只实现无缓存的 `resolve()`，等性能测试发现实际瓶颈后再针对性设计缓存方案。Rust 的编译优化比 JS 强，无缓存的实际性能损耗预计远小于 TS。
+
+---
+
+## Phase 2.2/2.3 设计决策（NodeType / MarkType / Schema）
+
+### 决策 14：删除 `Schema.cached`
+
+TS 的 `cached: {[key: string]: any}` 是通用扩展槽，实际只用于存 `wrappings` 缓存。该缓存已移入 `ContentMatch.wrap_cache`（决策2），Schema 不再需要此字段。Rust 里 `HashMap<String, Box<dyn Any + Send + Sync>>` 既丑又难用，直接删除。
+
+### 决策 15：保留 `MarkType.instance` 优化
+
+TS 里当 mark 所有属性都有默认值时，提前缓存一个默认 Mark 实例，`create()` 时直接返回，不新建对象。`em`、`strong` 等无属性 mark 在文档里出现频率极高，此优化有实际价值。
+
+Rust 里对应：
+
+```rust
+pub struct MarkType {
+    instance: Option<Arc<Mark>>,  // 所有属性有默认值时预建
+    // ...
+}
+```
+
+### 决策 16：`is_leaf` 检查边数，不用 ptr_eq
+
+TS 靠 `contentMatch == ContentMatch.empty` 对象引用相等判断叶子节点。Rust 里用 `Arc::ptr_eq` 可以模拟，但依赖单例比较，语义不直接。改为：
+
+```rust
+pub fn is_leaf(&self) -> bool {
+    self.content_match.edge_count() == 0 && self.content_match.valid_end
+}
+```
+
+### 决策 17：不存 `nodeFromJSON`/`markFromJSON` 闭包
+
+TS 将这两个方法存为绑定闭包是因为 JS 方法调用需要绑定 `this`。Rust 方法自动持有 `&self`，直接写成普通方法，无需存闭包。
+
+---
+
+## Phase 3 设计决策（Mark / Diff / Replace）
+
+### 决策 18：mark set 用 `Arc<[Mark]>` 而不是 `Vec<Mark>`
+
+文档树里大量节点共享相同的 mark set（尤其是空 mark set）。`Arc<[Mark]>` 允许零拷贝共享，`Vec<Mark>` 每次都要克隆。与 TS 的 `readonly Mark[]` 语义一致，但内存效率更高。
+
+### 决策 19：`Mark::none` 为全局单例
+
+TS 的 `static none: readonly Mark[] = []` 是运行时静态字段。Rust 里用 `OnceLock<Arc<[Mark]>>` 实现全局单例，所有无 mark 节点共享同一个 Arc。该值为只读数据，无副作用，线程安全。
+
+### 决策 20：Mark 实现 `PartialEq` + `Hash`
+
+TS 用 `mark.eq(other)` 自定义方法比较。Rust 里实现 `PartialEq` 支持 `==` 运算符，同时必须实现 `Hash`（Rust 语义约定：实现 `PartialEq` 的类型若可能用作集合键，必须同时实现 `Hash`）。两者必须一起加。
+
+### 决策 21：replace 全链路返回 `Result`
+
+TS 里 `replace()` 及内部辅助函数通过 `throw new ReplaceError(...)` 传递错误，调用方无法在编译期感知。Rust 里整条调用链返回 `Result<Node, ReplaceError>`，调用方在编译期必须处理错误，不可能漏掉。这不是可选优化，是 Rust 的正确做法。
+
+### 决策 22：`findDiffEnd` 返回具名 struct
+
+TS 返回 `{a: number, b: number} | null`。Rust 里用具名 struct 替代匿名对象：
+
+```rust
+pub struct DiffEnd {
+    pub a: usize,
+    pub b: usize,
+}
+// 返回 Option<DiffEnd>
+```
+
+语义比元组 `(usize, usize)` 更清晰，调用方不需要记住位置含义。
+
+---
+
+## Phase 3 基础设计决策（影响所有文件）
+
+### 决策 26：Fragment 存 `Vec<Arc<Node>>`，不用 `Arc<[Node]>`
+
+两个方向：
+
+- **`Arc<[Node]>`**：节点紧凑存储，一次分配。但 PathStep 只能持有 `&Node`，需要生命周期参数 `'a`，ResolvedPos、transform、state 所有模块全部感染，代价极大。
+- **`Vec<Arc<Node>>`**：每个节点独立包 Arc，PathStep 直接存 `Arc<Node>`，ResolvedPos 无需生命周期，API 简洁。
+
+**决定：** 使用 `Vec<Arc<Node>>`。多一次堆分配换来整个系统无生命周期负担，值得。
+
+Fragment 定义更新为：
+
+```rust
+pub struct Fragment {
+    content: Vec<Arc<Node>>,
+    pub size: usize,
+}
+```
+
+同时 PathStep 定义：
+
+```rust
+struct PathStep {
+    node: Arc<Node>,
+    index: usize,
+    start: usize,
+}
+```
+
+### 决策 27：保持 4 个独立错误类型，不统一成枚举
+
+当前有 `SchemaError`、`ReplaceError`、`SyntaxError`、`RangeError` 四个独立 struct。
+
+统一成单一枚举的好处是 `?` 可以统一传播，但代价是调用方每次 match 都要处理不可能出现的变体（比如调用 `replace` 的地方不可能遇到 `SchemaError`）。
+
+**决定：** 保持现状，4 个独立 struct 各自对应自己的使用场景，调用方只处理真正可能出现的错误类型。
+
+---
+
+## 跨模块通用设计决策
+
+### 决策 23：JSON 序列化手写方法，不用 serde DeserializeSeed
+
+所有类型的 `fromJSON` 需要 `Schema` 参数（根据名字查找 NodeType/MarkType）。serde 的 `Deserialize` trait 不支持传额外参数，绕过限制需要用 `DeserializeSeed`，调用方写法复杂且无法融入 serde 生态（axum、sqlx 等期待标准 `Deserialize`）。
+
+**决定：** 全部手写：
+
+```rust
+impl Node {
+    pub fn to_json(&self) -> Value { ... }
+    pub fn from_json(schema: &Schema, json: &Value) -> Result<Node, RangeError> { ... }
+}
+```
+
+调用方写法和 TS 几乎一致，简单直接。`toJSON` 方向（序列化）可酌情用 serde，因为不需要传额外参数。
+
+### 决策 24：所有类型实现 `Display` trait 替代 `toString()`
+
+TS 里 `Fragment`、`Node`、`Slice`、`ResolvedPos` 等类型都有 `toString()` 用于调试输出。Rust 里实现 `std::fmt::Display`，可直接用 `format!("{}", node)`、`println!`、`dbg!`，与所有 Rust 内置类型用法一致，零额外代价。
+
+### 决策 25：`Schema::new` 内用局部 HashMap 缓存 ContentMatch
+
+TS 构建 Schema 时用局部 `contentExprCache` 避免相同内容表达式重复编译 DFA。Rust 里对应：
+
+```rust
+let mut expr_cache: HashMap<String, Arc<ContentMatch>> = HashMap::new();
+// 构建完自动释放，不影响外部
+```
+
+大型 schema 里多个节点共享同一内容规则（如 `"inline*"`）时，避免重复编译，是正确实现的一部分，不是可选优化。
+
+---
+
 ## 外部依赖
 
 ```toml

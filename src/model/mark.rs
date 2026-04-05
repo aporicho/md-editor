@@ -3,6 +3,7 @@
 // Mark：附加在节点上的样式信息（如加粗、链接等）。
 // 对应 TypeScript 的 mark.ts。
 //
+#![allow(dead_code)] // TODO: Phase 3.2+ 中 Fragment/Node 使用后移除
 use std::sync::Arc;
 
 use crate::model::schema::{Attrs, MarkType};

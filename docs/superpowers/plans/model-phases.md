@@ -18,7 +18,7 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 2.1 | ContentMatch DFA 核心 | content.rs（不含 Fragment 依赖方法） | Phase 1 | ✅ 完成 |
 | Phase 2.2 | NodeType + MarkType | schema.rs 续（NodeType、MarkType） | Phase 2.1 | ✅ 完成 |
 | Phase 2.3 | Schema::new 两遍构建 | schema.rs 续（Schema::new）+ tests_schema | Phase 2.2 | ✅ 完成 |
-| Phase 3.1 | Mark + MarkType stubs 补全 | mark.rs + tests_mark.rs + schema.rs（MarkType create/remove_from_set/is_in_set） | Phase 2.3 | ⬜ 待开始 |
+| Phase 3.1 | Mark + MarkType stubs 补全 | mark.rs + tests_mark.rs + schema.rs（MarkType create/remove_from_set/is_in_set） | Phase 2.3 | ✅ 完成 |
 | Phase 3.2 | Fragment + Node 基础 + diff | fragment.rs, node.rs（基础 struct + nodeSize）, diff.rs + tests_diff.rs | Phase 3.1 | ⬜ 待开始 |
 | Phase 3.3 | Fragment + Node 完整方法 | fragment.rs 续, node.rs 续 + tests_node.rs | Phase 3.2 | ⬜ 待开始 |
 | Phase 3.4 | ContentMatch 完整 + tests_content | content.rs 续（match_fragment, fill_before, find_wrapping）+ tests_content.rs | Phase 3.3 | ⬜ 待开始 |

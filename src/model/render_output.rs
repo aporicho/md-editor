@@ -5,4 +5,7 @@
 /// At that point, this type will be replaced with the actual cosmic-text output type.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct RenderOutput(pub serde_json::Value);
+pub enum RenderOutput {
+    /// Placeholder variant — will be replaced once the cosmic-text layer is defined.
+    Pending,
+}
