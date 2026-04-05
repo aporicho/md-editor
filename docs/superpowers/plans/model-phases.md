@@ -20,8 +20,8 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 2.3 | Schema::new 两遍构建 | schema.rs 续（Schema::new）+ tests_schema | Phase 2.2 | ✅ 完成 |
 | Phase 3.1 | Mark + MarkType stubs 补全 | mark.rs + tests_mark.rs + schema.rs（MarkType create/remove_from_set/is_in_set） | Phase 2.3 | ✅ 完成 |
 | Phase 3.2 | Fragment + Node 全部方法 + diff | fragment.rs, node.rs（含所有方法）, diff.rs + tests_diff.rs, schema.rs stubs 补全 | Phase 3.1 | ✅ 完成 |
-| Phase 3.3-a | 测试基础设施 test_builder | src/model/test_builder.rs — doc/p/h1/blockquote/em/strong/img/br 等快捷构建函数 | Phase 3.2 | ⬜ 待开始 |
-| Phase 3.3-b | text_between leaf_text 回调扩展 | fragment.rs + node.rs — leaf_text 参数支持闭包形式 | Phase 3.2 | ⬜ 待开始 |
+| Phase 3.3-a | 测试基础设施 test_builder | src/model/test_builder.rs — doc/p/h1/blockquote/em/strong/img/br 等快捷构建函数 | Phase 3.2 | ✅ 完成 |
+| Phase 3.3-b | text_between leaf_text 回调扩展 | fragment.rs + node.rs — leaf_text 参数支持闭包形式 | Phase 3.2 | ✅ 完成 |
 | Phase 3.3-c | tests_node.rs | tests_node.rs — 移植 test-node.ts 约 34 个测试（check 相关 4 个推迟到 Phase 3.4-c） | Phase 3.3-a + Phase 3.3-b | ✅ 完成 |
 | Phase 3.4-a | match_fragment + valid_content | content.rs（match_fragment）+ schema.rs（NodeType::valid_content）+ 架构决策：fill_before/find_wrapping 增加 schema 参数 | Phase 3.3-c | ⬜ 待开始 |
 | Phase 3.4-b | fill_before + create_and_fill | content.rs（fill_before）+ schema.rs（NodeType::create_and_fill）+ tests_content.rs fill 系列（28 个测试） | Phase 3.4-a | ⬜ 待开始 |
