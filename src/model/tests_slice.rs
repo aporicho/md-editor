@@ -195,3 +195,98 @@ fn from_json_roundtrip() {
     let restored = Slice::from_json(s, Some(&json)).unwrap();
     assert!(restored.eq(&original));
 }
+
+use crate::model::test_builder::{blockquote, hr, li, ul};
+
+#[test]
+fn max_open_empty_fragment_returns_zero_zero() {
+    let s = Slice::max_open(Fragment::empty(), true);
+    assert_eq!(s.open_start, 0);
+    assert_eq!(s.open_end, 0);
+}
+
+#[test]
+fn max_open_leaf_only_returns_zero_zero() {
+    // horizontal_rule 是 block-level leaf
+    let frag = Fragment::from_node(hr());
+    let s = Slice::max_open(frag, true);
+    assert_eq!(s.open_start, 0);
+    assert_eq!(s.open_end, 0);
+}
+
+#[test]
+fn max_open_single_paragraph_returns_one_one() {
+    let frag = Fragment::from_node(p(&[t("hi")]));
+    let s = Slice::max_open(frag, true);
+    assert_eq!(s.open_start, 1);
+    assert_eq!(s.open_end, 1);
+}
+
+#[test]
+fn max_open_nested_blockquote_paragraph_returns_two_two() {
+    // blockquote(p("x")) 深度 2
+    let frag = Fragment::from_node(blockquote(&[p(&[t("x")])]));
+    let s = Slice::max_open(frag, true);
+    assert_eq!(s.open_start, 2);
+    assert_eq!(s.open_end, 2);
+}
+
+#[test]
+fn max_open_deeply_nested_three_levels() {
+    // blockquote(ul(li(p("x")))) 深度 4
+    let frag = Fragment::from_node(blockquote(&[ul(&[li(&[p(&[t("x")])])])]));
+    let s = Slice::max_open(frag, true);
+    assert_eq!(s.open_start, 4);
+    assert_eq!(s.open_end, 4);
+}
+
+#[test]
+fn max_open_asymmetric_start_end_differs() {
+    // Fragment[p("a"), blockquote(p("b"))]
+    // first_child 是 p ⇒ open_start 深度 1
+    // last_child 是 blockquote ⇒ open_end 深度 2
+    let frag = Fragment::from_array(&[
+        p(&[t("a")]),
+        blockquote(&[p(&[t("b")])]),
+    ]);
+    let s = Slice::max_open(frag, true);
+    assert_eq!(s.open_start, 1);
+    assert_eq!(s.open_end, 2);
+}
+
+#[test]
+fn max_open_open_isolating_true_descends_into_isolating_node() {
+    // 用本地定义的 isolating schema
+    use crate::model::schema::{Schema, SchemaSpec, NodeSpec};
+    use indexmap::indexmap;
+
+    let schema = Schema::new(SchemaSpec {
+        nodes: indexmap! {
+            "doc".to_string() => NodeSpec { content: Some("iso+".to_string()), ..NodeSpec::default() },
+            "iso".to_string() => NodeSpec {
+                content: Some("paragraph+".to_string()),
+                isolating: true,
+                ..NodeSpec::default()
+            },
+            "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+            "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+        },
+        marks: indexmap! { },
+        top_node: None,
+    }).unwrap();
+
+    let text = schema.text("hi".to_string(), vec![]);
+    let para = schema.nodes["paragraph"].create(None, Some(Fragment::from_node(text)), vec![]).unwrap();
+    let iso = schema.nodes["iso"].create(None, Some(Fragment::from_node(para)), vec![]).unwrap();
+    let frag = Fragment::from_node(iso);
+
+    // isolating=true ⇒ 降进 iso 节点 ⇒ open_start/open_end = 2 (iso→paragraph)
+    let s_true = Slice::max_open(frag.clone(), true);
+    assert_eq!(s_true.open_start, 2);
+    assert_eq!(s_true.open_end, 2);
+
+    // isolating=false 且节点 isolating=true ⇒ 停在 iso 外 ⇒ open = 0
+    let s_false = Slice::max_open(frag, false);
+    assert_eq!(s_false.open_start, 0);
+    assert_eq!(s_false.open_end, 0);
+}

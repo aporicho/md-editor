@@ -108,4 +108,29 @@ impl Slice {
         let content = Fragment::from_json(schema, obj.get("content"))?;
         Ok(Slice::new(content, open_start, open_end))
     }
+
+    /// Create a slice from a fragment by taking the maximum possible
+    /// open value on both sides of the fragment.
+    ///
+    /// When `open_isolating` is `false`, isolating nodes (those whose spec
+    /// has `isolating: true`) are treated as leaves and not descended into.
+    pub fn max_open(fragment: Fragment, open_isolating: bool) -> Slice {
+        let mut open_start = 0usize;
+        let mut n = fragment.first_child();
+        while let Some(node) = n {
+            if node.is_leaf() { break; }
+            if !open_isolating && node.node_type.spec.isolating { break; }
+            open_start += 1;
+            n = node.first_child();
+        }
+        let mut open_end = 0usize;
+        let mut n = fragment.last_child();
+        while let Some(node) = n {
+            if node.is_leaf() { break; }
+            if !open_isolating && node.node_type.spec.isolating { break; }
+            open_end += 1;
+            n = node.last_child();
+        }
+        Slice::new(fragment, open_start, open_end)
+    }
 }
