@@ -550,6 +550,292 @@ impl MarkType {
     }
 }
 
+/// Gather MarkType instances for a list of mark name/group tokens.
+///
+/// Each token is either a direct mark type name or a group name that expands
+/// to all marks whose spec.group contains that name.
+fn gather_marks(
+    tokens: &[&str],
+    mark_types: &IndexMap<String, Arc<MarkType>>,
+) -> Result<Vec<Arc<MarkType>>, crate::model::errors::SchemaError> {
+    use crate::model::errors::SchemaError;
+    let mut found: Vec<Arc<MarkType>> = vec![];
+    for &token in tokens {
+        if let Some(mt) = mark_types.get(token) {
+            found.push(mt.clone());
+        } else {
+            let mut any = false;
+            for mt in mark_types.values() {
+                if mt
+                    .spec
+                    .group
+                    .as_deref()
+                    .is_some_and(|g| g.split_whitespace().any(|s| s == token))
+                {
+                    found.push(mt.clone());
+                    any = true;
+                }
+            }
+            if !any {
+                return Err(SchemaError(format!("Unknown mark type: '{}'", token)));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Resolve a NodeSpec.marks expression to a mark set.
+///
+/// - None + inline_content=true  → None (all marks allowed)
+/// - None + inline_content=false → Some([]) (no marks)
+/// - "_"                         → None (all marks allowed)
+/// - ""                          → Some([]) (no marks)
+/// - "em strong …"               → Some(gathered list)
+fn resolve_mark_set(
+    marks_expr: Option<&str>,
+    mark_types: &IndexMap<String, Arc<MarkType>>,
+    inline_content: bool,
+) -> Result<Option<Vec<Arc<MarkType>>>, crate::model::errors::SchemaError> {
+    match marks_expr {
+        Some("_") => Ok(None),
+        Some("") => Ok(Some(vec![])),
+        Some(s) => {
+            let tokens: Vec<&str> = s.split_whitespace().collect();
+            Ok(Some(gather_marks(&tokens, mark_types)?))
+        }
+        None => {
+            if inline_content {
+                Ok(None)
+            } else {
+                Ok(Some(vec![]))
+            }
+        }
+    }
+}
+
+/// Resolve a MarkSpec.excludes expression to an ExcludeSpec.
+///
+/// - None      → SelfOnly (default: a mark excludes marks of the same type)
+/// - "_"       → All
+/// - ""        → Named([]) (excludes nothing)
+/// - "em …"    → Named(resolved type names, expanding group names)
+fn resolve_excluded(
+    excludes_expr: Option<&str>,
+    _self_name: &str,
+    mark_types: &IndexMap<String, Arc<MarkType>>,
+) -> Result<ExcludeSpec, crate::model::errors::SchemaError> {
+    use crate::model::errors::SchemaError;
+    match excludes_expr {
+        None => Ok(ExcludeSpec::SelfOnly),
+        Some("_") => Ok(ExcludeSpec::All),
+        Some("") => Ok(ExcludeSpec::Named(vec![])),
+        Some(s) => {
+            let mut names: Vec<String> = vec![];
+            for token in s.split_whitespace() {
+                if mark_types.contains_key(token) {
+                    if !names.contains(&token.to_string()) {
+                        names.push(token.to_string());
+                    }
+                } else {
+                    let mut any = false;
+                    for (mname, mt) in mark_types {
+                        if mt
+                            .spec
+                            .group
+                            .as_deref()
+                            .is_some_and(|g| g.split_whitespace().any(|gr| gr == token))
+                        {
+                            if !names.contains(mname) {
+                                names.push(mname.clone());
+                            }
+                            any = true;
+                        }
+                    }
+                    if !any {
+                        return Err(SchemaError(format!("Unknown mark type: '{}'", token)));
+                    }
+                }
+            }
+            Ok(ExcludeSpec::Named(names))
+        }
+    }
+}
+
+/// A document schema. Holds node type and mark type objects for the nodes and marks
+/// that may occur in conforming documents, and provides functionality for
+/// creating and deserializing such documents.
+///
+/// Corresponds to `Schema` in TypeScript.
+pub struct Schema {
+    /// An object mapping the schema's node names to node type objects.
+    pub nodes: IndexMap<String, Arc<NodeType>>,
+    /// A map from mark names to mark type objects.
+    pub marks: IndexMap<String, Arc<MarkType>>,
+    /// The type of the default top node for this schema.
+    pub top_node_type: Arc<NodeType>,
+    /// The linebreak replacement node defined in this schema, if any.
+    pub linebreak_replacement: Option<Arc<NodeType>>,
+    /// The spec on which the schema is based.
+    pub spec: SchemaSpec,
+}
+
+impl fmt::Debug for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Schema")
+            .field("nodes", &self.nodes.keys().collect::<Vec<_>>())
+            .field("marks", &self.marks.keys().collect::<Vec<_>>())
+            .field("top_node_type", &self.top_node_type.name)
+            .finish()
+    }
+}
+
+impl Schema {
+    /// Construct a schema from a schema specification.
+    ///
+    /// Construct a schema from a schema [specification](#model.SchemaSpec).
+    pub fn new(spec: SchemaSpec) -> Result<Arc<Self>, crate::model::errors::SchemaError> {
+        use crate::model::content::ContentMatch;
+        use crate::model::errors::SchemaError;
+
+        let top_name = spec.top_node.as_deref().unwrap_or("doc");
+
+        // --- Validation ---
+        if !spec.nodes.contains_key(top_name) {
+            return Err(SchemaError(format!(
+                "Schema is missing its top node type ('{}')",
+                top_name
+            )));
+        }
+        if !spec.nodes.contains_key("text") {
+            return Err(SchemaError("Every schema needs a 'text' type".to_string()));
+        }
+        if spec.nodes.get("text").is_some_and(|ns| !ns.attrs.is_empty()) {
+            return Err(SchemaError(
+                "The text node type should not have attributes".to_string(),
+            ));
+        }
+        for name in spec.marks.keys() {
+            if spec.nodes.contains_key(name.as_str()) {
+                return Err(SchemaError(format!(
+                    "{} can not be both a node and a mark",
+                    name
+                )));
+            }
+        }
+
+        // --- First pass: create NodeType Arcs (refcount = 1) ---
+        let mut node_types: IndexMap<String, Arc<NodeType>> = IndexMap::new();
+        for (name, ns) in &spec.nodes {
+            let is_block = !(ns.inline || name == "text");
+            let groups: Vec<String> = ns
+                .group
+                .as_deref()
+                .map(|g| g.split_whitespace().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            let whitespace = ns.whitespace.unwrap_or(if ns.code {
+                Whitespace::Pre
+            } else {
+                Whitespace::Normal
+            });
+            let da = default_attrs(&ns.attrs);
+            node_types.insert(
+                name.clone(),
+                Arc::new(NodeType {
+                    name: name.clone(),
+                    is_block,
+                    is_text: name == "text",
+                    inline_content: false,
+                    groups,
+                    content_match: ContentMatch::empty(),
+                    mark_set: None,
+                    whitespace,
+                    spec: ns.clone(),
+                    default_attrs: da,
+                }),
+            );
+        }
+
+        // --- First pass: create MarkType Arcs (refcount = 1) ---
+        let mut mark_types: IndexMap<String, Arc<MarkType>> = IndexMap::new();
+        for (rank, (name, ms)) in spec.marks.iter().enumerate() {
+            let da = default_attrs(&ms.attrs);
+            mark_types.insert(
+                name.clone(),
+                Arc::new(MarkType {
+                    name: name.clone(),
+                    rank,
+                    inclusive: ms.inclusive,
+                    excluded: ExcludeSpec::SelfOnly,
+                    spec: ms.clone(),
+                    default_attrs: da,
+                }),
+            );
+        }
+
+        // --- Build helper maps for ContentMatch::parse ---
+        let is_inline_map: IndexMap<String, bool> = node_types
+            .iter()
+            .map(|(n, nt)| (n.clone(), nt.is_inline()))
+            .collect();
+        let groups_map: IndexMap<String, Vec<String>> = {
+            let mut map: IndexMap<String, Vec<String>> = IndexMap::new();
+            for (name, nt) in &node_types {
+                for g in &nt.groups {
+                    map.entry(g.clone()).or_default().push(name.clone());
+                }
+            }
+            map
+        };
+        let has_required_map: IndexMap<String, bool> = node_types
+            .iter()
+            .map(|(n, nt)| (n.clone(), nt.has_required_attrs()))
+            .collect();
+
+        // --- Second pass: fill NodeType fields (refcount = 1, Arc::get_mut safe) ---
+        let mut linebreak_replacement: Option<Arc<NodeType>> = None;
+        for (name, ns) in &spec.nodes {
+            let nt = Arc::get_mut(node_types.get_mut(name).unwrap()).unwrap();
+            let expr = ns.content.as_deref().unwrap_or("");
+            let cm =
+                ContentMatch::parse(expr, &is_inline_map, &groups_map, &has_required_map)
+                    .map_err(|e| SchemaError(e.0))?;
+            nt.inline_content = cm.inline_content;
+            nt.content_match = cm;
+            nt.mark_set =
+                resolve_mark_set(ns.marks.as_deref(), &mark_types, nt.inline_content)?;
+            if ns.linebreak_replacement {
+                if linebreak_replacement.is_some() {
+                    return Err(SchemaError(
+                        "Multiple linebreak nodes defined".to_string(),
+                    ));
+                }
+                if !nt.is_inline() || !nt.is_leaf() {
+                    return Err(SchemaError(
+                        "Linebreak replacement nodes must be inline leaf nodes".to_string(),
+                    ));
+                }
+                linebreak_replacement = Some(node_types[name].clone());
+            }
+        }
+
+        // --- Second pass: fill MarkType.excluded ---
+        for (name, ms) in &spec.marks {
+            let excluded =
+                resolve_excluded(ms.excludes.as_deref(), name, &mark_types)?;
+            Arc::get_mut(mark_types.get_mut(name).unwrap()).unwrap().excluded = excluded;
+        }
+
+        let top_node_type = node_types[top_name].clone();
+        Ok(Arc::new(Schema {
+            nodes: node_types,
+            marks: mark_types,
+            top_node_type,
+            linebreak_replacement,
+            spec,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,6 +1328,87 @@ mod tests {
         let em = make_em_marktype();
         let result = em.compute_attrs_for(None).unwrap();
         assert!(result.is_empty());
+    }
+
+    // ---- Schema 基础测试 ----
+
+    fn minimal_schema_spec() -> SchemaSpec {
+        use indexmap::indexmap;
+        SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec {
+                    content: Some("paragraph+".to_string()),
+                    ..NodeSpec::default()
+                },
+                "paragraph".to_string() => NodeSpec {
+                    content: Some("text*".to_string()),
+                    group: Some("block".to_string()),
+                    ..NodeSpec::default()
+                },
+                "text".to_string() => NodeSpec {
+                    inline: true,
+                    ..NodeSpec::default()
+                },
+            },
+            marks: IndexMap::new(),
+            top_node: None,
+        }
+    }
+
+    #[test]
+    fn schema_new_builds_successfully() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        assert!(s.nodes.contains_key("doc"));
+        assert!(s.nodes.contains_key("paragraph"));
+        assert!(s.nodes.contains_key("text"));
+    }
+
+    #[test]
+    fn schema_top_node_type_is_doc() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        assert_eq!(s.top_node_type.name, "doc");
+    }
+
+    #[test]
+    fn schema_error_missing_top_node() {
+        let mut spec = minimal_schema_spec();
+        spec.top_node = Some("missing".to_string());
+        assert!(Schema::new(spec).is_err());
+    }
+
+    #[test]
+    fn schema_error_missing_text_node() {
+        use indexmap::indexmap;
+        let spec = SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec::default(),
+            },
+            marks: IndexMap::new(),
+            top_node: None,
+        };
+        let result = Schema::new(spec);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().0.contains("text"));
+    }
+
+    #[test]
+    fn schema_error_text_node_has_attrs() {
+        use indexmap::indexmap;
+        let mut spec = minimal_schema_spec();
+        if let Some(ns) = spec.nodes.get_mut("text") {
+            ns.attrs = indexmap! {
+                "x".to_string() => AttrSpec { default: None, validate: None }
+            };
+        }
+        assert!(Schema::new(spec).is_err());
+    }
+
+    #[test]
+    fn schema_error_name_both_node_and_mark() {
+        let mut spec = minimal_schema_spec();
+        spec.marks.insert("paragraph".to_string(), MarkSpec::default());
+        assert!(Schema::new(spec).is_err());
     }
 }
 
