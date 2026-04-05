@@ -444,7 +444,34 @@ impl Node {
     ///
     /// Checks content validity, attribute validity, and mark set validity.
     pub fn check(&self) -> Result<(), crate::model::errors::RangeError> {
-        todo!("Node::check: implement in Phase 3.4-c")
+        self.node_type.check_content(&self.content)?;
+        self.node_type.check_attrs(&self.attrs)?;
+        // 验证 marks：构建规范化 mark set 并与实际 marks 比较
+        let mut copy: Vec<crate::model::mark::Mark> = vec![];
+        for mark in &self.marks {
+            mark.mark_type.check_attrs(&mark.attrs)?;
+            copy = mark.add_to_set(&copy);
+        }
+        if !crate::model::mark::Mark::same_set(&copy, &self.marks) {
+            return Err(crate::model::errors::RangeError(format!(
+                "Invalid collection of marks for node {}: {}",
+                self.node_type.name,
+                self.marks
+                    .iter()
+                    .map(|m| m.mark_type.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        // 递归检查子节点
+        // 注意：i 始终在 0..child_count() 范围内，child() 不可能返回 Err，用 expect 表达此不变式
+        for i in 0..self.content.child_count() {
+            self.content
+                .child(i)
+                .expect("i < child_count() is always valid")
+                .check()?;
+        }
+        Ok(())
     }
 
     /// Test whether replacing the range `from` to `to` (by child index) with
@@ -457,7 +484,27 @@ impl Node {
         start: usize,
         end: usize,
     ) -> bool {
-        todo!("Node::can_replace: implement in Phase 3.4-c")
+        // 从 from 位置开始匹配 replacement[start..end]
+        let one = self
+            .content_match_at(from)
+            .and_then(|m| m.match_fragment(replacement, start, end));
+        // 再从匹配后的状态继续匹配剩余的原有内容 [to..]
+        let two = one
+            .as_ref()
+            .and_then(|m| m.match_fragment(&self.content, to, self.child_count()));
+        // 对应 TS: if (!two || !two.validEnd) return false
+        if !two.is_some_and(|m| m.valid_end) {
+            return false;
+        }
+        // 检查 replacement 的每个子节点的 marks 是否被允许
+        for i in start..end {
+            if let Ok(child) = replacement.child(i) {
+                if !self.node_type.allows_marks(&child.marks) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Test whether replacing the range `from` to `to` (by child index) with
@@ -469,12 +516,36 @@ impl Node {
         type_name: &str,
         marks: &[crate::model::mark::Mark],
     ) -> bool {
-        todo!("Node::can_replace_with: implement in Phase 3.4-c")
+        // 若指定了 marks，先检查这些 marks 是否被本节点类型允许
+        if !marks.is_empty() && !self.node_type.allows_marks(marks) {
+            return false;
+        }
+        // 从 from 位置匹配 type_name
+        let start = self
+            .content_match_at(from)
+            .and_then(|m| m.match_type(type_name));
+        // 再从匹配后继续匹配剩余内容 [to..]
+        let end = start
+            .as_ref()
+            .and_then(|m| m.match_fragment(&self.content, to, self.child_count()));
+        end.map_or(false, |m| m.valid_end)
     }
 
     /// Test whether the given node's content could be appended to this node.
     pub fn can_append(&self, other: &Node) -> bool {
-        todo!("Node::can_append: implement in Phase 3.4-c")
+        if other.content.size > 0 {
+            // other 有内容：检查能否在末尾插入 other 的所有内容
+            self.can_replace(
+                self.child_count(),
+                self.child_count(),
+                &other.content,
+                0,
+                other.content.child_count(),
+            )
+        } else {
+            // other 为空：检查两个节点的 content match 是否相容（共享至少一个允许的类型）
+            self.node_type.compatible_content(&other.node_type)
+        }
     }
 
     /// NOTE: stub — requires Slice + ResolvedPos (Phase 4).
