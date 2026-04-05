@@ -14,7 +14,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
 
 | 阶段 | 名称 | 文件 | 前置依赖 | 状态 |
 |---|---|---|---|---|
-| Phase 1 | 基础类型与 Spec | errors, compare_deep, render_output, schema spec 类型, Cargo.toml | 无 | ⬜ 待开始 |
+| Phase 1 | 基础类型与 Spec | errors, compare_deep, render_output, schema spec 类型, Cargo.toml | 无 | ✅ 完成 |
 | Phase 2 | ContentMatch + Schema 核心 | content.rs, schema.rs（NodeType/MarkType/Schema::new） | Phase 1 | ⬜ 待开始 |
 | Phase 3 | 文档类型 | mark.rs, diff.rs, fragment.rs, node.rs | Phase 2 | ⬜ 待开始 |
 | Phase 4 | 导航与替换 | resolved_pos.rs, replace.rs, tests_content.rs | Phase 3 | ⬜ 待开始 |
