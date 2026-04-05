@@ -296,6 +296,68 @@ range = Some(match range {
 
 TS 里 `removeMark` 通过 `found.to = end` 直接修改 `matched` 数组里的对象扩展范围，和 `addMark` 是同一个问题。Rust 里同样积累 `(start, end, mark)` 元组，遍历完成后统一创建 Step，与决策 11 保持一致。
 
+### 决策 20：`setBlockType` 的 attrs 参数用 `IntoAttrs` trait
+
+TS 里 `attrs: Attrs | null | ((oldNode) => Attrs)` 靠运行时判断传入类型。Rust 里用 trait 在编译期解决，调用方直接传想传的：
+
+```rust
+pub trait IntoAttrs {
+    fn into_attrs(self, node: &Arc<Node>) -> Option<Attrs>;
+}
+
+impl IntoAttrs for Option<Attrs> {
+    fn into_attrs(self, _node: &Arc<Node>) -> Option<Attrs> { self }
+}
+
+impl<F: Fn(&Arc<Node>) -> Attrs> IntoAttrs for F {
+    fn into_attrs(self, node: &Arc<Node>) -> Option<Attrs> { Some(self(node)) }
+}
+```
+
+调用方体验：
+```rust
+tr.set_block_type(from, to, node_type, None);              // 不改 attrs
+tr.set_block_type(from, to, node_type, Some(attrs));       // 静态 attrs
+tr.set_block_type(from, to, node_type, |node| compute(node)); // 动态计算
+```
+
+编译期确定类型，闭包走单态化，性能比 `Box<dyn Fn>` 更好。
+
+### 决策 21：`split` 的 `typesAfter` 用 `SplitType` 枚举
+
+TS 里 `(null | {type, attrs})[]` 每个元素 null 表示"保持原类型"。Rust 里嵌套两层 Option 视觉上很重，改用语义清晰的枚举：
+
+```rust
+pub enum SplitType {
+    Keep,                                      // 保持原类型（对应 null）
+    Replace(Arc<NodeType>, Option<Attrs>),     // 替换为新类型
+}
+// 参数类型
+typesAfter: Option<Vec<SplitType>>
+```
+
+调用方一看 `Keep` 就懂，不需要理解 `Option<Option<...>>` 的嵌套含义。
+
+### 决策 22：`Step` trait 加 `json_id` 方法，统一 id 来源
+
+TS 里注册时把 id 存在原型上，`to_json` 里直接用 `this.jsonID`，单一来源。Rust 目前若各自在 `to_json` 里硬编码字符串，id 和注册表分离，容易不一致。
+
+在 trait 上加 `json_id` 方法：
+
+```rust
+pub trait Step: Any + Send + Sync {
+    fn json_id(&self) -> &str;  // 唯一 id 来源
+    fn to_json(&self) -> Value {
+        let mut obj = json!({"stepType": self.json_id()});
+        // 各子类补充自己的字段
+        obj
+    }
+    // ...
+}
+```
+
+注册时用 `step.json_id()`，序列化时也用 `self.json_id()`，一处定义，全局一致。
+
 ---
 
 ## 文件结构
