@@ -16,3 +16,5 @@ pub mod diff;
 mod tests_diff;
 #[cfg(test)]
 pub(crate) mod test_builder;
+#[cfg(test)]
+mod tests_node;
