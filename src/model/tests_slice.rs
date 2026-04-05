@@ -290,3 +290,63 @@ fn max_open_open_isolating_true_descends_into_isolating_node() {
     assert_eq!(s_false.open_start, 0);
     assert_eq!(s_false.open_end, 0);
 }
+
+#[test]
+fn remove_between_flat_text_within_paragraph() {
+    // content = Fragment[p("hello")] size=7
+    // Slice 打开 1/1 ⇒ 相对坐标 [0..5] 对应文本 "hello"
+    // remove_between(1, 4) ⇒ 删除 "ell",保留 "ho"
+    let s = Slice::new(Fragment::from_node(p(&[t("hello")])), 1, 1);
+    let result = s.remove_between(1, 4).unwrap();
+    let expected_content = Fragment::from_node(p(&[t("ho")]));
+    assert!(result.content.eq(&expected_content));
+    assert_eq!(result.open_start, 1);
+    assert_eq!(result.open_end, 1);
+}
+
+#[test]
+fn remove_between_drops_whole_paragraph() {
+    // content = Fragment[p("a"), p("b")] size=6 (3+3)
+    // open_start=0, open_end=0
+    // remove_between(0, 3) 删除第一个段落
+    let frag = Fragment::from_array(&[p(&[t("a")]), p(&[t("b")])]);
+    let s = Slice::new(frag, 0, 0);
+    let result = s.remove_between(0, 3).unwrap();
+    let expected = Fragment::from_node(p(&[t("b")]));
+    assert!(result.content.eq(&expected));
+}
+
+#[test]
+fn remove_between_nested_inside_single_paragraph() {
+    // content = Fragment[p("abcdef")] size=8
+    // open=0/0
+    // remove_between(2, 5) ⇒ 删除 "bcd"(p 子文本中字符 1..4)
+    // 在 Fragment 层面:from=2 落在 p 内部(offset=0),to=5 也在 p 内部,index==index_to ⇒ 递归
+    let s = Slice::new(Fragment::from_node(p(&[t("abcdef")])), 0, 0);
+    let result = s.remove_between(2, 5).unwrap();
+    let expected = Fragment::from_node(p(&[t("aef")]));
+    assert!(result.content.eq(&expected));
+}
+
+#[test]
+fn remove_between_non_flat_range_errors_across_paragraphs() {
+    // content = Fragment[p("ab"), p("cd")] size=8
+    // from=1(在 p1 内部,offset=0, index=0, index_to 不同)
+    // to=5(在 p2 内部,index=1)
+    // index != index_to ⇒ 报错
+    let frag = Fragment::from_array(&[p(&[t("ab")]), p(&[t("cd")])]);
+    let s = Slice::new(frag, 0, 0);
+    let err = s.remove_between(1, 5).err().unwrap();
+    assert!(err.0.contains("Removing non-flat range"));
+}
+
+#[test]
+fn remove_between_respects_open_start_offset() {
+    // content = Fragment[p("abcde")] size=7
+    // open_start=1, open_end=1 ⇒ 相对坐标 [0..5]
+    // remove_between(0, 2) ⇒ 实际 from=1, to=3 ⇒ 删除 "ab"
+    let s = Slice::new(Fragment::from_node(p(&[t("abcde")])), 1, 1);
+    let result = s.remove_between(0, 2).unwrap();
+    let expected = Fragment::from_node(p(&[t("cde")]));
+    assert!(result.content.eq(&expected));
+}

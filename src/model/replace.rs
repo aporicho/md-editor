@@ -133,4 +133,50 @@ impl Slice {
         }
         Slice::new(fragment, open_start, open_end)
     }
+
+    /// @internal — remove a flat range from this slice's content.
+    ///
+    /// `from` and `to` are slice-relative positions (not including `open_start`);
+    /// the implementation shifts them by `open_start` before calling `remove_range`.
+    pub fn remove_between(&self, from: usize, to: usize) -> Result<Slice, RangeError> {
+        let new_content = remove_range(
+            &self.content,
+            from + self.open_start,
+            to + self.open_start,
+        )?;
+        Ok(Slice::new(new_content, self.open_start, self.open_end))
+    }
+}
+
+/// Internal: remove a flat range [from, to) from a fragment.
+/// Returns `Err(RangeError)` when the range is not flat (spans multiple
+/// non-text children at different depths).
+fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment, RangeError> {
+    let (index, offset) = content.find_index(from)?;
+    let (index_to, offset_to) = content.find_index(to)?;
+    let child_is_text = content.maybe_child(index).map(|n| n.is_text()).unwrap_or(false);
+
+    if offset == from || child_is_text {
+        // 平凡删除路径
+        if offset_to != to {
+            // to 不在子节点边界 ⇒ 必须也是文本节点,否则非平凡
+            let child_to_is_text = content.maybe_child(index_to)
+                .map(|n| n.is_text())
+                .unwrap_or(false);
+            if !child_to_is_text {
+                return Err(RangeError("Removing non-flat range".to_string()));
+            }
+        }
+        return Ok(content.cut(0, Some(from)).append(&content.cut(to, None)));
+    }
+
+    // 非平凡路径:from 在某个非文本子节点内部
+    if index != index_to {
+        return Err(RangeError("Removing non-flat range".to_string()));
+    }
+    // 此时 maybe_child(index) 一定是 Some(因为 offset != from 且不在边界)
+    let child = content.maybe_child(index)
+        .expect("remove_range: child must exist when offset != from");
+    let inner = remove_range(&child.content, from - offset - 1, to - offset - 1)?;
+    Ok(content.replace_child(index, child.copy(Some(inner))))
 }
