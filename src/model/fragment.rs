@@ -212,6 +212,62 @@ impl Fragment {
         text
     }
 
+    /// 与 `text_between` 相同，但叶节点文本由闭包 `leaf_fn` 决定。
+    ///
+    /// 当闭包返回空字符串时，该叶节点不贡献任何文本。
+    pub fn text_between_fn<F>(
+        &self,
+        from: usize,
+        to: usize,
+        block_separator: Option<&str>,
+        leaf_fn: F,
+    ) -> String
+    where
+        F: Fn(&Node) -> String,
+    {
+        let mut text = String::new();
+        let mut first = true;
+        self.nodes_between(
+            from,
+            to,
+            &mut |node: &Node, pos: usize, _parent: Option<&Node>, _idx: usize| -> bool {
+                let node_text = if node.is_text() {
+                    let t = node.text.as_deref().unwrap_or("");
+                    let char_start = from.saturating_sub(pos);
+                    let char_end = (to - pos).min(t.chars().count());
+                    let byte_start = char_offset_to_byte_offset(t, char_start);
+                    let byte_end = char_offset_to_byte_offset(t, char_end);
+                    if byte_end > byte_start {
+                        t[byte_start..byte_end].to_string()
+                    } else {
+                        String::new()
+                    }
+                } else if node.node_type.is_leaf() {
+                    leaf_fn(node)
+                } else {
+                    String::new()
+                };
+
+                if node.node_type.is_block
+                    && (node.node_type.is_leaf() && !node_text.is_empty()
+                        || node.node_type.inline_content)
+                    && let Some(sep) = block_separator
+                {
+                    if first {
+                        first = false;
+                    } else {
+                        text.push_str(sep);
+                    }
+                }
+                text.push_str(&node_text);
+                !node.node_type.is_leaf()
+            },
+            0,
+            None,
+        );
+        text
+    }
+
     /// Create a new fragment containing the combined content of this fragment and the other.
     pub fn append(&self, other: &Fragment) -> Fragment {
         if other.size == 0 {

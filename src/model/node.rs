@@ -131,6 +131,20 @@ impl Node {
         self.content.text_between(from, to, block_separator, leaf_text)
     }
 
+    /// 与 `text_between` 相同，但叶节点文本由闭包 `leaf_fn` 决定。
+    pub fn text_between_fn<F>(
+        &self,
+        from: usize,
+        to: usize,
+        block_separator: Option<&str>,
+        leaf_fn: F,
+    ) -> String
+    where
+        F: Fn(&Node) -> String,
+    {
+        self.content.text_between_fn(from, to, block_separator, leaf_fn)
+    }
+
     /// Returns this node's first child, or `None` if there are no children.
     pub fn first_child(&self) -> Option<&Node> {
         self.content.first_child()

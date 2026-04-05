@@ -380,4 +380,28 @@ mod tests {
         let bl = n.child(0).unwrap();
         assert_eq!(bl.child_count(), 2);
     }
+
+    #[test]
+    fn text_between_fn_leaf_closure() {
+        // doc(p("foo", img(), br())) — 用闭包替换叶节点文本
+        let d = doc(&[p(&[t("foo"), img(), br()])]);
+        let result = d.text_between_fn(0, d.content.size, Some(""), |node: &Node| {
+            match node.node_type.name.as_str() {
+                "image" => "<image>".to_string(),
+                "hard_break" => "<break>".to_string(),
+                _ => String::new(),
+            }
+        });
+        assert_eq!(result, "foo<image><break>");
+    }
+
+    #[test]
+    fn text_between_fn_ignores_spec_leaf_text() {
+        // 即使节点有 spec.leaf_text，闭包优先
+        let d = doc(&[p(&[t("hello"), img()])]);
+        let result = d.text_between_fn(0, d.content.size, Some(""), |_node: &Node| {
+            "X".to_string()
+        });
+        assert_eq!(result, "helloX");
+    }
 }
