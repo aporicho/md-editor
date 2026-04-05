@@ -296,6 +296,8 @@ pub struct Node { ... }
 
 | 用途 | crate |
 |------|-------|
+| GUI 框架 | `iced` |
+| 文字渲染 | `cosmic-text` |
 | 有序 HashMap | `indexmap` |
 | JSON 序列化 | `serde` + `serde_json` |
 | Markdown 解析 | `pulldown-cmark` 或 `markdown-it` 的 Rust 实现 |
