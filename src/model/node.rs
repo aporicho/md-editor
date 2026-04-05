@@ -60,4 +60,72 @@ impl Node {
     pub fn is_text(&self) -> bool {
         self.node_type.is_text
     }
+
+    // ---- 占位方法：Task 3 替换为完整实现 ----
+
+    pub fn same_markup(&self, _other: &Node) -> bool {
+        // placeholder: Task 3 implements real comparison
+        Arc::ptr_eq(&self.node_type, &_other.node_type)
+            && *self.attrs == *_other.attrs
+            && crate::model::mark::Mark::same_set(&self.marks, &_other.marks)
+    }
+
+    pub fn with_text(&self, text: String) -> Node {
+        // placeholder: Task 3 implements full version
+        Node {
+            node_type: self.node_type.clone(),
+            attrs: self.attrs.clone(),
+            content: Fragment::empty(),
+            marks: self.marks.clone(),
+            text: Some(text),
+        }
+    }
+
+    pub fn cut_inner(&self, from: usize, to: usize) -> Node {
+        // placeholder: Task 3 implements full version
+        if from == 0 && to == self.content.size {
+            return self.clone();
+        }
+        Node {
+            node_type: self.node_type.clone(),
+            attrs: self.attrs.clone(),
+            content: self.content.cut(from, Some(to)),
+            marks: self.marks.clone(),
+            text: None,
+        }
+    }
+
+    pub fn eq(&self, other: &Node) -> bool {
+        // placeholder: Task 3 implements full version
+        std::ptr::eq(self as *const _, other as *const _)
+            || (self.same_markup(other) && self.content.eq(&other.content)
+                && self.text == other.text)
+    }
+
+    pub fn ptr_eq(&self, other: &Node) -> bool {
+        std::ptr::eq(self as *const _, other as *const _)
+    }
+
+    pub fn to_string_repr(&self) -> String {
+        // placeholder: Task 3 implements full version
+        self.node_type.name.clone()
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        // placeholder: Task 3 implements full version
+        let mut obj = serde_json::json!({ "type": self.node_type.name });
+        if let Some(ref t) = self.text {
+            obj["text"] = serde_json::Value::String(t.clone());
+        }
+        obj
+    }
+
+    pub fn from_json(
+        _schema: &crate::model::schema::Schema,
+        _json: &serde_json::Value,
+    ) -> Result<Node, crate::model::errors::RangeError> {
+        Err(crate::model::errors::RangeError(
+            "Node::from_json: placeholder — implement in Task 3".to_string(),
+        ))
+    }
 }
