@@ -2,3 +2,4 @@
 // 参见 docs/superpowers/specs/rust-prosemirror-porting-guide.md
 
 pub mod errors;
+pub mod compare_deep;
