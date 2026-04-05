@@ -8,6 +8,14 @@ use crate::model::errors::RangeError;
 
 static EMPTY_FRAGMENT: OnceLock<Fragment> = OnceLock::new();
 
+/// 将字符偏移转换为字节偏移。如果 char_offset >= char count，返回 str.len()。
+fn char_offset_to_byte_offset(s: &str, char_offset: usize) -> usize {
+    s.char_indices()
+        .nth(char_offset)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(s.len())
+}
+
 /// A fragment represents a node's collection of child nodes.
 ///
 /// Like nodes, fragments are persistent data structures, and you
@@ -166,9 +174,11 @@ impl Fragment {
             &mut |node: &Node, pos: usize, _parent: Option<&Node>, _idx: usize| -> bool {
                 let node_text = if node.is_text() {
                     let t = node.text.as_deref().unwrap_or("");
-                    let start = from.saturating_sub(pos);
-                    let end = (to - pos).min(t.len());
-                    if end > start { t[start..end].to_string() } else { String::new() }
+                    let char_start = from.saturating_sub(pos);
+                    let char_end = (to - pos).min(t.chars().count());
+                    let byte_start = char_offset_to_byte_offset(t, char_start);
+                    let byte_end = char_offset_to_byte_offset(t, char_end);
+                    if byte_end > byte_start { t[byte_start..byte_end].to_string() } else { String::new() }
                 } else if node.node_type.is_leaf() {
                     if let Some(lt) = leaf_text {
                         lt.to_string()
@@ -251,9 +261,11 @@ impl Fragment {
                     let child = if pos < from || end > to {
                         if child.is_text() {
                             let text = child.text.as_deref().unwrap_or("");
-                            let start = from.saturating_sub(pos);
-                            let end_idx = (to - pos).min(text.len());
-                            child.with_text(text[start..end_idx].to_string())
+                            let char_start = from.saturating_sub(pos);
+                            let char_end = (to - pos).min(text.chars().count());
+                            let byte_start = char_offset_to_byte_offset(text, char_start);
+                            let byte_end = char_offset_to_byte_offset(text, char_end);
+                            child.with_text(text[byte_start..byte_end].to_string())
                         } else {
                             let inner_from = from.saturating_sub(pos + 1);
                             let inner_to = child.content.size.min(to.saturating_sub(pos + 1));
@@ -484,5 +496,15 @@ mod tests {
         let f = Fragment::from_node(n);
         let cut = f.cut(1, Some(4));
         assert_eq!(cut.first_child().unwrap().text.as_deref(), Some("ell"));
+    }
+
+    #[test]
+    fn fragment_cut_unicode_safe() {
+        let s = simple_schema();
+        let n = Node::text_node(s.nodes["text"].clone(), empty_attrs(), "你好世界".to_string(), vec![]);
+        let f = Fragment::from_node(n);
+        // 字符偏移：切出 "好世"（字符 1..3）
+        let cut = f.cut(1, Some(3));
+        assert_eq!(cut.first_child().unwrap().text.as_deref(), Some("好世"));
     }
 }
