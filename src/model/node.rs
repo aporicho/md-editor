@@ -429,10 +429,14 @@ impl Node {
 
     // ---- Phase 3.4/4 stubs ----
 
-    /// NOTE: stub — requires ContentMatch::match_fragment (Phase 3.4).
-    #[allow(unused)]
-    pub fn content_match_at_stub(&self) -> ! {
-        todo!("Node::content_match_at requires ContentMatch::match_fragment — Phase 3.4")
+    /// Get the content match state in this node at the given child index.
+    pub fn content_match_at(
+        &self,
+        index: usize,
+    ) -> Option<Arc<crate::model::content::ContentMatch>> {
+        self.node_type
+            .content_match
+            .match_fragment(&self.content, 0, index)
     }
 
     /// NOTE: stub — requires ContentMatch::match_fragment (Phase 3.4).

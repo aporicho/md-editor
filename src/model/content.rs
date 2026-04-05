@@ -683,12 +683,22 @@ impl ContentMatch {
 
     // ---- Phase 3 stubs (依赖 Fragment，届时补全) ----
 
-    /// Try to match a fragment. Returns the resulting match state when successful.
+    /// Try to match a fragment against this content match state.
     ///
-    /// NOTE: stub — requires Fragment (Phase 3). Will be implemented in Phase 3.
-    #[allow(unused)]
-    pub fn match_fragment_stub(&self) -> ! {
-        todo!("match_fragment requires Fragment — implement in Phase 3")
+    /// Returns the resulting match state if successful, or `None` if
+    /// the fragment does not fit.
+    pub fn match_fragment(
+        self: &Arc<Self>,
+        frag: &crate::model::fragment::Fragment,
+        start: usize,
+        end: usize,
+    ) -> Option<Arc<ContentMatch>> {
+        let mut cur = self.clone();
+        for i in start..end {
+            let child = frag.child(i).ok()?;
+            cur = cur.match_type(&child.node_type.name)?;
+        }
+        Some(cur)
     }
 
     /// Fill in missing content to make `after` fit after the current match state.
@@ -990,5 +1000,115 @@ mod tests {
         assert!(matches(&m, &["heading", "paragraph"]));
         assert!(matches(&m, &["heading", "paragraph", "paragraph"]));
         assert!(!matches(&m, &["paragraph", "paragraph"]));
+    }
+
+    // ---- match_fragment 测试 ----
+
+    #[test]
+    fn match_fragment_empty_returns_self() {
+        use crate::model::fragment::Fragment;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+        let s = Schema::new(SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {},
+            top_node: None,
+        }).unwrap();
+        let cm = &s.nodes["doc"].content_match;
+        // Empty fragment: returns Some(cm itself)
+        let result = cm.match_fragment(&Fragment::empty(), 0, 0);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn match_fragment_valid_content() {
+        use crate::model::fragment::Fragment;
+        use crate::model::node::Node;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+        use std::sync::Arc;
+        let s = Schema::new(SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {},
+            top_node: None,
+        }).unwrap();
+        let para = Node::new(s.nodes["paragraph"].clone(), Arc::new(Default::default()), Fragment::empty(), vec![]);
+        let frag = Fragment::from_node(para);
+        let cm = &s.nodes["doc"].content_match;
+        // "paragraph+" can match one paragraph
+        let result = cm.match_fragment(&frag, 0, frag.child_count());
+        assert!(result.is_some());
+        assert!(result.unwrap().valid_end);
+    }
+
+    #[test]
+    fn match_fragment_invalid_content() {
+        use crate::model::fragment::Fragment;
+        use crate::model::node::Node;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+        use std::sync::Arc;
+        let s = Schema::new(SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {},
+            top_node: None,
+        }).unwrap();
+        // Create a "text" node (not a paragraph) — should not match "paragraph+"
+        let text = s.text("hello".to_string(), vec![]);
+        let frag = Fragment::from_node(text);
+        let cm = &s.nodes["doc"].content_match;
+        let result = cm.match_fragment(&frag, 0, frag.child_count());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn valid_content_true_for_valid_fragment() {
+        use crate::model::fragment::Fragment;
+        use crate::model::node::Node;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+        use std::sync::Arc;
+        let s = Schema::new(SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {},
+            top_node: None,
+        }).unwrap();
+        let para = Node::new(s.nodes["paragraph"].clone(), Arc::new(Default::default()), Fragment::empty(), vec![]);
+        let frag = Fragment::from_node(para);
+        assert!(s.nodes["doc"].valid_content(&frag));
+    }
+
+    #[test]
+    fn valid_content_false_for_empty_when_required() {
+        use crate::model::fragment::Fragment;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+        let s = Schema::new(SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+                "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {},
+            top_node: None,
+        }).unwrap();
+        // "paragraph+" requires at least one — empty fragment should fail valid_end
+        assert!(!s.nodes["doc"].valid_content(&Fragment::empty()));
     }
 }

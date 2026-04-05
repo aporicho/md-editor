@@ -495,11 +495,21 @@ impl NodeType {
     }
 
     /// Returns true if the given fragment is valid content for this node type.
-    ///
-    /// NOTE: stub — requires match_fragment (Phase 3.4).
-    #[allow(unused)]
-    pub fn valid_content_stub(&self) -> ! {
-        todo!("NodeType::valid_content requires match_fragment — implement in Phase 3.4")
+    pub fn valid_content(&self, content: &crate::model::fragment::Fragment) -> bool {
+        match self.content_match.match_fragment(content, 0, content.child_count()) {
+            None => false,
+            Some(m) if !m.valid_end => false,
+            Some(_) => {
+                for i in 0..content.child_count() {
+                    if let Ok(child) = content.child(i)
+                        && !self.allows_marks(&child.marks)
+                    {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
     }
 
     /// Test whether the given set of marks are allowed in this node.
