@@ -16,7 +16,7 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3 → Phase 4 → Ph
 |---|---|---|---|---|
 | Phase 1 | 基础类型与 Spec | errors, compare_deep, render_output, schema spec 类型, Cargo.toml | 无 | ✅ 完成 |
 | Phase 2.1 | ContentMatch DFA 核心 | content.rs（不含 Fragment 依赖方法） | Phase 1 | ✅ 完成 |
-| Phase 2.2 | NodeType + MarkType | schema.rs 续（NodeType、MarkType） | Phase 2.1 | ⬜ 待开始 |
+| Phase 2.2 | NodeType + MarkType | schema.rs 续（NodeType、MarkType） | Phase 2.1 | ✅ 完成 |
 | Phase 2.3 | Schema::new 两遍构建 | schema.rs 续（Schema::new）+ tests_schema | Phase 2.2 | ⬜ 待开始 |
 | Phase 3 | 文档类型 + ContentMatch 完整 | mark.rs, diff.rs, fragment.rs, node.rs + content.rs 续 + tests_content | Phase 2.3 | ⬜ 待开始 |
 | Phase 4 | 导航与替换 | resolved_pos.rs, replace.rs + tests | Phase 3 | ⬜ 待开始 |

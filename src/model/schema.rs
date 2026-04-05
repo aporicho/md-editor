@@ -428,10 +428,8 @@ impl NodeType {
         &self,
         attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<Attrs, crate::model::errors::SchemaError> {
-        if attrs.is_none() {
-            if let Some(defaults) = &self.default_attrs {
-                return Ok(defaults.clone());
-            }
+        if attrs.is_none() && let Some(defaults) = &self.default_attrs {
+            return Ok(defaults.clone());
         }
         compute_attrs(&self.spec.attrs, attrs)
     }
@@ -442,7 +440,7 @@ impl NodeType {
     pub fn allows_mark_type(&self, mark_type: &Arc<MarkType>) -> bool {
         self.mark_set
             .as_ref()
-            .map_or(true, |set| set.iter().any(|m| Arc::ptr_eq(m, mark_type)))
+            .is_none_or(|set| set.iter().any(|m| Arc::ptr_eq(m, mark_type)))
     }
 
     // ---- Phase 3 stubs (依赖 Fragment / Node / Mark) ----
@@ -517,10 +515,8 @@ impl MarkType {
         &self,
         attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<Attrs, crate::model::errors::SchemaError> {
-        if attrs.is_none() {
-            if let Some(defaults) = &self.default_attrs {
-                return Ok(defaults.clone());
-            }
+        if attrs.is_none() && let Some(defaults) = &self.default_attrs {
+            return Ok(defaults.clone());
         }
         compute_attrs(&self.spec.attrs, attrs)
     }
