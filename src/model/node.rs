@@ -225,6 +225,29 @@ impl Node {
         }
     }
 
+    /// Create a copy of this node with only a slice of its content.
+    ///
+    /// For text nodes, slices the text by char offsets (UTF-8 safe).
+    /// For non-text nodes, slices the content Fragment. `to` defaults to
+    /// the node's content size (text length for text nodes).
+    pub fn cut(&self, from: usize, to: Option<usize>) -> Node {
+        if self.is_text() {
+            let text = self.text.as_deref().unwrap_or("");
+            let char_len = text.chars().count();
+            let to = to.unwrap_or(char_len);
+            if from == 0 && to == char_len {
+                return self.clone();
+            }
+            // UTF-8 safe char slicing
+            let byte_start = text.char_indices().nth(from).map(|(b, _)| b).unwrap_or(text.len());
+            let byte_end = text.char_indices().nth(to).map(|(b, _)| b).unwrap_or(text.len());
+            self.with_text(text[byte_start..byte_end].to_string())
+        } else {
+            let to = to.unwrap_or(self.content.size);
+            self.cut_inner(from, to)
+        }
+    }
+
     /// Create a copy of this node with only the content between the given positions.
     pub fn cut_inner(&self, from: usize, to: usize) -> Node {
         if from == 0 && to == self.content.size {
@@ -705,5 +728,41 @@ mod tests {
         let j = para.to_json();
         let restored = Node::from_json(&s, &j).unwrap();
         assert!(para.eq(&restored));
+    }
+
+    #[test]
+    fn node_cut_text_slices_by_chars() {
+        let s = simple_schema();
+        let n = Node::text_node(s.nodes["text"].clone(), empty_attrs(), "hello".to_string(), vec![]);
+        let cut = n.cut(1, Some(4));
+        assert_eq!(cut.text.as_deref(), Some("ell"));
+    }
+
+    #[test]
+    fn node_cut_text_default_to_is_full_length() {
+        let s = simple_schema();
+        let n = Node::text_node(s.nodes["text"].clone(), empty_attrs(), "hello".to_string(), vec![]);
+        let cut = n.cut(2, None); // to = text.len() = 5
+        assert_eq!(cut.text.as_deref(), Some("llo"));
+    }
+
+    #[test]
+    fn node_cut_text_unicode_safe() {
+        let s = simple_schema();
+        let n = Node::text_node(s.nodes["text"].clone(), empty_attrs(), "你好世界".to_string(), vec![]);
+        let cut = n.cut(1, Some(3));
+        assert_eq!(cut.text.as_deref(), Some("好世"));
+    }
+
+    #[test]
+    fn node_cut_non_text_returns_same_when_full_range() {
+        let s = simple_schema();
+        let t1 = Node::text_node(s.nodes["text"].clone(), empty_attrs(), "hi".to_string(), vec![]);
+        let p = s.nodes["paragraph"]
+            .create(None, Some(Fragment::from_node(t1)), vec![])
+            .unwrap();
+        let cut = p.cut(0, None); // to = content.size = 2, full range
+        // cut_inner returns self.clone() when from==0 && to==content.size
+        assert_eq!(cut.text_content(), "hi");
     }
 }
