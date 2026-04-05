@@ -105,4 +105,35 @@ impl ResolvedPos {
     pub fn resolve(doc: &Node, pos: usize) -> Result<ResolvedPos, RangeError> {
         ResolvedPos::resolve_no_cache(doc, pos)
     }
+
+    /// The parent node that the position points into.
+    pub fn parent(&self) -> &Node {
+        &self.path[self.depth].node
+    }
+
+    /// The root node in which the position was resolved.
+    pub fn doc(&self) -> &Node {
+        &self.path[0].node
+    }
+
+    /// The ancestor node at the given depth.
+    pub fn node(&self, depth: Option<i32>) -> &Node {
+        &self.path[self.resolve_depth(depth)].node
+    }
+
+    /// The index into the ancestor at the given depth.
+    pub fn index(&self, depth: Option<i32>) -> usize {
+        self.path[self.resolve_depth(depth)].index
+    }
+
+    /// The index pointing after this position into the ancestor at the
+    /// given depth. Adds 1 when the position is inside a text node or
+    /// when `depth` is higher (closer to root) than `self.depth`.
+    pub fn index_after(&self, depth: Option<i32>) -> usize {
+        let depth = self.resolve_depth(depth);
+        // "at text start" = pos 恰好落在 last frame 的 start_pos(text_offset == 0)
+        let at_text_start = self.pos == self.path[self.depth].start_pos;
+        let bump = if depth == self.depth && at_text_start { 0 } else { 1 };
+        self.path[depth].index + bump
+    }
 }

@@ -263,3 +263,79 @@ fn resolve_in_empty_doc() {
     assert_eq!(rp.depth, 0);
     assert_eq!(rp.parent_offset, 2);
 }
+
+// --- Task 1: 简单 path 访问器测试 ---
+
+#[test]
+fn parent_returns_deepest_frame_node() {
+    let d = test_doc();
+    // pos=7 ⇒ path=[doc, blk, p2],parent 是 p2 (paragraph)
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.parent().node_type.name, "paragraph");
+}
+
+#[test]
+fn doc_returns_root_node() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.doc().node_type.name, "doc");
+    // pos=0 时 depth=0,doc() 和 parent() 相同
+    let rp_zero = ResolvedPos::resolve(&d, 0).unwrap();
+    assert_eq!(rp_zero.doc().node_type.name, "doc");
+    assert_eq!(rp_zero.parent().node_type.name, "doc");
+}
+
+#[test]
+fn node_returns_frame_at_requested_depth() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // pos=7 path=[doc, blk, p2]
+    assert_eq!(rp.node(Some(0)).node_type.name, "doc");
+    assert_eq!(rp.node(Some(1)).node_type.name, "blockquote");
+    assert_eq!(rp.node(Some(2)).node_type.name, "paragraph");
+    // None ⇒ self.depth (2)
+    assert_eq!(rp.node(None).node_type.name, "paragraph");
+    // 负数:-1 ⇒ depth-1 = 1 (blockquote)
+    assert_eq!(rp.node(Some(-1)).node_type.name, "blockquote");
+}
+
+#[test]
+fn index_returns_frame_index_at_depth() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // pos=7 的 path 索引:(doc,1,4),(blk,0,5),(p2,0,6)
+    assert_eq!(rp.index(Some(0)), 1); // blockquote 是 doc 的第 1 个子
+    assert_eq!(rp.index(Some(1)), 0); // p2 是 blk 的第 0 个子
+    assert_eq!(rp.index(Some(2)), 0); // text 是 p2 的第 0 个子
+    assert_eq!(rp.index(None), 0);    // 默认 = self.depth = 2
+}
+
+#[test]
+fn index_after_excludes_current_index_when_at_boundary() {
+    let d = test_doc();
+    // pos=4(p1 和 blk 之间,depth=0,text_offset=0)
+    // index(0)=1, depth==self.depth && text_offset==0 ⇒ +0 ⇒ 1
+    let rp = ResolvedPos::resolve(&d, 4).unwrap();
+    assert_eq!(rp.index_after(None), 1);
+    assert_eq!(rp.index_after(Some(0)), 1);
+}
+
+#[test]
+fn index_after_increments_when_inside_text() {
+    let d = test_doc();
+    // pos=7(在 text "cdef" 内,depth=2,text_offset=1>0)
+    // index(2)=0, depth==self.depth && text_offset>0 ⇒ +1 ⇒ 1
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.index_after(None), 1);
+    assert_eq!(rp.index_after(Some(2)), 1);
+}
+
+#[test]
+fn index_after_increments_when_depth_not_self_depth() {
+    let d = test_doc();
+    // pos=7(depth=2),index_after(0) 访问 depth=0 != self.depth ⇒ +1
+    // index(0)=1, +1 = 2
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.index_after(Some(0)), 2);
+    assert_eq!(rp.index_after(Some(1)), 1); // index(1)=0, +1=1
+}
