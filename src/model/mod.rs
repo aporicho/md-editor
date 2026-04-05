@@ -18,3 +18,5 @@ mod tests_diff;
 pub(crate) mod test_builder;
 #[cfg(test)]
 mod tests_node;
+#[cfg(test)]
+mod tests_content;
