@@ -21,11 +21,6 @@ mod tests {
     /// Parse a content expression against the test_schema node types.
     fn get(expr: &str) -> Arc<ContentMatch> {
         let schema = test_schema();
-        let is_inline: IndexMap<String, bool> = schema
-            .nodes
-            .iter()
-            .map(|(n, nt)| (n.clone(), nt.is_inline()))
-            .collect();
         let groups: IndexMap<String, Vec<String>> = {
             let mut m: IndexMap<String, Vec<String>> = IndexMap::new();
             for (name, nt) in &schema.nodes {
@@ -35,12 +30,7 @@ mod tests {
             }
             m
         };
-        let has_required: IndexMap<String, bool> = schema
-            .nodes
-            .iter()
-            .map(|(n, nt)| (n.clone(), nt.has_required_attrs()))
-            .collect();
-        ContentMatch::parse(expr, &is_inline, &groups, &has_required)
+        ContentMatch::parse(expr, &schema.nodes, &groups)
             .unwrap_or_else(|e| panic!("content parse failed for '{}': {:?}", expr, e))
     }
 
@@ -48,12 +38,11 @@ mod tests {
     /// get(expr).matchFragment(before_content)!.fillBefore(after_content, true)
     /// then compare result to `expected` (or assert None).
     fn fill(expr: &str, before_content: Fragment, after_content: Fragment, expected: Option<Fragment>) {
-        let schema = test_schema();
         let cm = get(expr);
         let matched = cm
             .match_fragment(&before_content, 0, before_content.child_count())
             .unwrap_or_else(|| panic!("fill: matchFragment failed for before_content in '{}'", expr));
-        let filled = matched.fill_before(schema, &after_content, true, 0);
+        let filled = matched.fill_before(&after_content, true, 0);
         match expected {
             Some(exp) => {
                 let filled = filled
@@ -85,17 +74,16 @@ mod tests {
         expected_left: Option<Fragment>,
         expected_right: Option<Fragment>,
     ) {
-        let schema = test_schema();
         let cm = get(expr);
         let a = cm
             .match_fragment(&before, 0, before.child_count())
             .unwrap_or_else(|| panic!("fill3: matchFragment failed for `before` in '{}'", expr))
-            .fill_before(schema, &mid, false, 0);
+            .fill_before(&mid, false, 0);
         let b = a.as_ref().and_then(|fill_a| {
             let combined = before.append(fill_a).append(&mid);
             cm.match_fragment(&combined, 0, combined.child_count())
                 .unwrap_or_else(|| panic!("fill3: matchFragment failed for combined in '{}'", expr))
-                .fill_before(schema, &after, true, 0)
+                .fill_before(&after, true, 0)
         });
         match expected_left {
             Some(left) => {
