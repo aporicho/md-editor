@@ -184,4 +184,51 @@ impl ResolvedPos {
     pub fn text_offset(&self) -> usize {
         self.pos - self.path[self.depth].start_pos
     }
+
+    /// Get the position at the given index in the parent node at the given depth.
+    pub fn pos_at_index(&self, index: usize, depth: Option<i32>) -> usize {
+        let depth = self.resolve_depth(depth);
+        let node = &self.path[depth].node;
+        let mut pos = if depth == 0 { 0 } else { self.path[depth - 1].start_pos + 1 };
+        for i in 0..index {
+            if let Ok(child) = node.child(i) {
+                pos += child.node_size();
+            }
+        }
+        pos
+    }
+
+    /// Get the node directly after the position, if any. If the position
+    /// points into a text node, only the part of that node after the
+    /// position is returned.
+    pub fn node_after(&self) -> Option<Node> {
+        let parent = &self.path[self.depth].node;
+        let index = self.path[self.depth].index;
+        if index == parent.child_count() {
+            return None;
+        }
+        let d_off = self.text_offset();
+        let child = parent.child(index).ok()?;
+        if d_off > 0 {
+            Some(child.cut(d_off, None))
+        } else {
+            Some(child.clone())
+        }
+    }
+
+    /// Get the node directly before the position, if any. If the position
+    /// points into a text node, only the part of that node before the
+    /// position is returned.
+    pub fn node_before(&self) -> Option<Node> {
+        let parent = &self.path[self.depth].node;
+        let index = self.path[self.depth].index;
+        let d_off = self.text_offset();
+        if d_off > 0 {
+            return parent.child(index).ok().map(|c| c.cut(0, Some(d_off)));
+        }
+        if index == 0 {
+            return None;
+        }
+        parent.child(index - 1).ok().cloned()
+    }
 }

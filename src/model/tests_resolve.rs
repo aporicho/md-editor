@@ -438,3 +438,87 @@ fn after_returns_frame_start_plus_node_size_otherwise() {
     assert_eq!(rp.after(Some(1)).unwrap(), 12);
     assert_eq!(rp.after(Some(2)).unwrap(), 11);
 }
+
+// --- Task 3: pos_at_index + node_after + node_before 测试 ---
+
+#[test]
+fn pos_at_index_at_depth_zero() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // depth=0,node=doc,base pos=0
+    // pos_at_index(0, 0) = 0
+    // pos_at_index(1, 0) = 0 + p1.node_size(4) = 4
+    // pos_at_index(2, 0) = 4 + blk.node_size(8) = 12
+    assert_eq!(rp.pos_at_index(0, Some(0)), 0);
+    assert_eq!(rp.pos_at_index(1, Some(0)), 4);
+    assert_eq!(rp.pos_at_index(2, Some(0)), 12);
+}
+
+#[test]
+fn pos_at_index_at_deeper_depth() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // depth=2,node=p2,base pos = path[1].start_pos + 1 = 5+1 = 6
+    // pos_at_index(0, 2) = 6
+    // pos_at_index(1, 2) = 6 + text("cdef").node_size(4) = 10
+    assert_eq!(rp.pos_at_index(0, Some(2)), 6);
+    assert_eq!(rp.pos_at_index(1, Some(2)), 10);
+}
+
+#[test]
+fn node_after_returns_full_child_when_at_boundary() {
+    let d = test_doc();
+    // pos=4(p1 和 blk 之间,text_offset=0,index=1)
+    // node_after = parent(doc).child(1) = blockquote 完整节点
+    let rp = ResolvedPos::resolve(&d, 4).unwrap();
+    let after = rp.node_after().unwrap();
+    assert_eq!(after.node_type.name, "blockquote");
+}
+
+#[test]
+fn node_after_returns_none_at_last_index() {
+    let d = test_doc();
+    // pos=12(doc 末尾,index=2==doc.child_count=2)
+    let rp = ResolvedPos::resolve(&d, 12).unwrap();
+    assert!(rp.node_after().is_none());
+}
+
+#[test]
+fn node_after_cuts_text_when_inside_text_node() {
+    let d = test_doc();
+    // pos=7(text "cdef" 内部,text_offset=1)
+    // parent=p2, index=0, child=text("cdef"), d_off=1 ⇒ cut(1) = text("def")
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let after = rp.node_after().unwrap();
+    assert!(after.is_text());
+    assert_eq!(after.text.as_deref(), Some("def"));
+}
+
+#[test]
+fn node_before_returns_none_at_start() {
+    let d = test_doc();
+    // pos=0(doc 开头,index=0,text_offset=0)
+    let rp = ResolvedPos::resolve(&d, 0).unwrap();
+    assert!(rp.node_before().is_none());
+}
+
+#[test]
+fn node_before_returns_previous_child_when_at_boundary() {
+    let d = test_doc();
+    // pos=4(text_offset=0,index=1)⇒ parent.child(0) = p1 整个节点
+    let rp = ResolvedPos::resolve(&d, 4).unwrap();
+    let before = rp.node_before().unwrap();
+    assert_eq!(before.node_type.name, "paragraph");
+    assert_eq!(before.text_content(), "ab");
+}
+
+#[test]
+fn node_before_cuts_text_when_inside_text_node() {
+    let d = test_doc();
+    // pos=7(text "cdef" 内部,text_offset=1)
+    // parent=p2, index=0, d_off=1 > 0 ⇒ parent.child(0).cut(0, 1) = text("c")
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let before = rp.node_before().unwrap();
+    assert!(before.is_text());
+    assert_eq!(before.text.as_deref(), Some("c"));
+}
