@@ -495,7 +495,27 @@ impl NodeType {
         attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
         marks: Vec<crate::model::mark::Mark>,
     ) -> Option<crate::model::node::Node> {
-        todo!("create_and_fill: implement in Phase 3.4-b")
+        if self.is_text {
+            return None;
+        }
+        let attrs = self.compute_attrs_for(attrs).ok()?;
+        // Start with empty content
+        let content = crate::model::fragment::Fragment::empty();
+        // match_fragment(empty, 0, 0) always returns Some(content_match) — no iterations
+        let matched = self.content_match.match_fragment(&content, 0, 0)?;
+        // Fill to reach a valid end from matched state
+        let after = matched.fill_before(
+            schema,
+            &crate::model::fragment::Fragment::empty(),
+            true,
+            0,
+        )?;
+        Some(crate::model::node::Node::new(
+            self.clone(),
+            attrs,
+            content.append(&after),
+            marks,
+        ))
     }
 
     /// Returns true if the given fragment is valid content for this node type.
