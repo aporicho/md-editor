@@ -6,7 +6,7 @@
 
 ## 目标
 
-将 ProseMirror 编辑器生态（TypeScript）完整重写为 Rust，支撑基于 Iced + comit-text 渲染的 Markdown 编辑器。功能范围对齐 ProseMirror 全部库，包含协同编辑。
+将 ProseMirror 编辑器生态（TypeScript）完整重写为 Rust，支撑基于 Iced + cosmic-text 渲染的 Markdown 编辑器。功能范围对齐 ProseMirror 全部库，包含协同编辑。
 
 ---
 
@@ -42,7 +42,7 @@ ProseMirror 每个公开类的每个公开方法和属性，都必须在 Rust �
 
 一旦开始写一个文件，必须写完——所有方法、所有测试、全部通过后再提交。不允许写一半留 `TODO`、`unimplemented!()` 或空方法体后转去写别的。如果某个文件的实现依赖另一个尚未实现的文件，先把依赖文件实现完再回来。
 
-**例外：外部依赖尚未存在时。** 当某个 API 的实现依赖一个尚未设计/实现的外部层（如 comit-text 渲染层），允许用 `todo!("原因说明")` 作为方法体占位，但必须满足：
+**例外：外部依赖尚未存在时。** 当某个 API 的实现依赖一个尚未设计/实现的外部层（如 cosmic-text 渲染层），允许用 `todo!("原因说明")` 作为方法体占位，但必须满足：
 1. 文件顶部有注释说明哪些方法是占位及原因
 2. 公开 API 签名必须完整正确（不能因为占位而省略参数或返回类型）
 3. 该文件在对应的外部层实现后必须立即补全
@@ -88,7 +88,7 @@ ProseMirror 每个公开类的每个公开方法和属性，都必须在 Rust �
 
 ## 项目背景
 
-将 ProseMirror 编辑器生态（TypeScript）重写为 Rust，服务于 Iced + comit-text 渲染的 Markdown 编辑器。包含全部功能，含协同编辑。
+将 ProseMirror 编辑器生态（TypeScript）重写为 Rust，服务于 Iced + cosmic-text 渲染的 Markdown 编辑器。包含全部功能，含协同编辑。
 
 **参考源码位置：** `reference/prosemirror-*/src/`
 

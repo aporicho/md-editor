@@ -126,7 +126,7 @@ impl AttrSpec {
 ///
 /// Corresponds to `NodeSpec` interface in TypeScript.
 /// DOM-related fields (toDOM, parseDOM) are replaced by rendering hooks
-/// for the comit-text layer. See design doc for rationale.
+/// for the cosmic-text layer. See design doc for rationale.
 #[allow(dead_code)]
 pub struct NodeSpec {
     /// The content expression for this node (e.g. `"block+"`, `"inline*"`).
@@ -160,7 +160,7 @@ pub struct NodeSpec {
     pub isolating: bool,
     /// Whether this inline leaf node acts as a linebreak replacement.
     pub linebreak_replacement: bool,
-    /// Rendering hook (comit-text placeholder). Called to render a node.
+    /// Rendering hook (cosmic-text placeholder). Called to render a node.
     pub to_render: Option<NodeRenderFn>,
     /// Returns a plain-text string for leaf node content (used in textBetween).
     pub leaf_text: Option<NodeLeafTextFn>,
@@ -211,7 +211,7 @@ pub struct MarkSpec {
     pub spanning: bool,
     /// Whether this mark's content is code.
     pub code: bool,
-    /// Rendering hook (comit-text placeholder). Called to render a mark.
+    /// Rendering hook (cosmic-text placeholder). Called to render a mark.
     pub to_render: Option<MarkRenderFn>,
 }
 

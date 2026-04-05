@@ -465,8 +465,8 @@ git commit -m "feat(model): add compare_deep for recursive JSON value equality"
 /// Rendering output placeholder type.
 ///
 /// Replaces the browser DOM output types (DOMOutputSpec) from prosemirror-model.
-/// This is a placeholder until the comit-text rendering layer is implemented.
-/// At that point, this type will be replaced with the actual comit-text output type.
+/// This is a placeholder until the cosmic-text rendering layer is implemented.
+/// At that point, this type will be replaced with the actual cosmic-text output type.
 #[derive(Debug, Clone)]
 pub struct RenderOutput(pub serde_json::Value);
 ```
@@ -492,7 +492,7 @@ Expected: 无报错
 
 ```bash
 git add src/model/render_output.rs src/model/mod.rs
-git commit -m "feat(model): add RenderOutput placeholder type for comit-text integration"
+git commit -m "feat(model): add RenderOutput placeholder type for cosmic-text integration"
 ```
 
 ---
@@ -727,7 +727,7 @@ impl AttrSpec {
 ///
 /// Corresponds to `NodeSpec` interface in TypeScript.
 /// DOM-related fields (toDOM, parseDOM) are replaced by rendering hooks
-/// for the comit-text layer. See design doc for rationale.
+/// for the cosmic-text layer. See design doc for rationale.
 pub struct NodeSpec {
     /// The content expression for this node (e.g. `"block+"`, `"inline*"`).
     pub content: Option<String>,
@@ -760,7 +760,7 @@ pub struct NodeSpec {
     pub isolating: bool,
     /// Whether this inline leaf node acts as a linebreak replacement.
     pub linebreak_replacement: bool,
-    /// Rendering hook (comit-text placeholder). Called to render a node.
+    /// Rendering hook (cosmic-text placeholder). Called to render a node.
     pub to_render: Option<Box<dyn Fn(&Value) -> RenderOutput + Send + Sync>>,
     /// Returns a plain-text string for leaf node content (used in textBetween).
     pub leaf_text: Option<Box<dyn Fn(&Value) -> String + Send + Sync>>,
@@ -810,7 +810,7 @@ pub struct MarkSpec {
     pub spanning: bool,
     /// Whether this mark's content is code.
     pub code: bool,
-    /// Rendering hook (comit-text placeholder). Called to render a mark.
+    /// Rendering hook (cosmic-text placeholder). Called to render a mark.
     pub to_render: Option<Box<dyn Fn(&Value, bool) -> RenderOutput + Send + Sync>>,
 }
 

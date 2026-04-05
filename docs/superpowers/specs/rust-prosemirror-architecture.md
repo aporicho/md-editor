@@ -34,7 +34,7 @@ commands ──┤
   → state.apply(tr) → EditorState   ← 不可变，返回新 state
   → plugins.apply(tr)               ← 每个 Plugin.state.apply 更新自身状态
   → history 记录 Step[]
-  → Iced 重新渲染 (comit-text)
+  → Iced 重新渲染 (cosmic-text)
 ```
 
 ---

@@ -16,10 +16,10 @@
 
 ### 决策 1：DOM 相关 API 改为渲染层 stub
 
-TS 的 `DOMParser`、`DOMSerializer`、`DOMOutputSpec`、`ParseRule` 等类型是浏览器专用 API，本项目使用 Iced + comit-text 原生渲染，不经过 HTML DOM。
+TS 的 `DOMParser`、`DOMSerializer`、`DOMOutputSpec`、`ParseRule` 等类型是浏览器专用 API，本项目使用 Iced + cosmic-text 原生渲染，不经过 HTML DOM。
 
 **处理方式：**
-- `dom_parser.rs` / `dom_serializer.rs`：创建文件，公开 API 签名完整，方法体用 `todo!("需要 comit-text 集成后实现")`
+- `dom_parser.rs` / `dom_serializer.rs`：创建文件，公开 API 签名完整，方法体用 `todo!("需要 cosmic-text 集成后实现")`
 - `NodeSpec.to_render` / `MarkSpec.to_render`：字段保留，使用 `RenderOutput` 占位类型
 - `test-dom.ts`：跳过，不创建对应测试文件
 - 依据移植指南原则 7 例外条款（外部依赖尚未存在）
@@ -309,11 +309,11 @@ pub struct RangeError(pub String);     // 位置越界等范围错误
 
 ```rust
 // render_output.rs
-/// 渲染输出占位类型，待 comit-text 接口确定后替换。
+/// 渲染输出占位类型，待 cosmic-text 接口确定后替换。
 pub struct RenderOutput(pub serde_json::Value);
 
 // dom_parser.rs
-// 注意：以下所有方法均为占位实现，待 comit-text 渲染层完成后实现。
+// 注意：以下所有方法均为占位实现，待 cosmic-text 渲染层完成后实现。
 pub struct ParseOptions {
     pub preserve_whitespace: Option<bool>,
     pub find_positions: Option<Vec<usize>>,
@@ -326,21 +326,21 @@ pub struct ParseOptions {
 
 pub struct DOMParser { schema: Arc<Schema> }
 impl DOMParser {
-    pub fn from_schema(schema: &Arc<Schema>) -> Self { todo!("需要 comit-text 集成后实现") }
-    pub fn parse(&self, input: &RenderOutput, options: Option<ParseOptions>) -> Node { todo!("需要 comit-text 集成后实现") }
-    pub fn parse_slice(&self, input: &RenderOutput, options: Option<ParseOptions>) -> Slice { todo!("需要 comit-text 集成后实现") }
+    pub fn from_schema(schema: &Arc<Schema>) -> Self { todo!("需要 cosmic-text 集成后实现") }
+    pub fn parse(&self, input: &RenderOutput, options: Option<ParseOptions>) -> Node { todo!("需要 cosmic-text 集成后实现") }
+    pub fn parse_slice(&self, input: &RenderOutput, options: Option<ParseOptions>) -> Slice { todo!("需要 cosmic-text 集成后实现") }
 }
 
 // dom_serializer.rs
-// 注意：以下所有方法均为占位实现，待 comit-text 渲染层完成后实现。
+// 注意：以下所有方法均为占位实现，待 cosmic-text 渲染层完成后实现。
 pub struct DOMSerializer {
     pub nodes: HashMap<String, Box<dyn Fn(&Node) -> RenderOutput + Send + Sync>>,
     pub marks: HashMap<String, Box<dyn Fn(&Mark, bool) -> RenderOutput + Send + Sync>>,
 }
 impl DOMSerializer {
-    pub fn from_schema(schema: &Arc<Schema>) -> Self { todo!("需要 comit-text 集成后实现") }
-    pub fn serialize_node(&self, node: &Node) -> RenderOutput { todo!("需要 comit-text 集成后实现") }
-    pub fn serialize_fragment(&self, fragment: &Fragment) -> RenderOutput { todo!("需要 comit-text 集成后实现") }
+    pub fn from_schema(schema: &Arc<Schema>) -> Self { todo!("需要 cosmic-text 集成后实现") }
+    pub fn serialize_node(&self, node: &Node) -> RenderOutput { todo!("需要 cosmic-text 集成后实现") }
+    pub fn serialize_fragment(&self, fragment: &Fragment) -> RenderOutput { todo!("需要 cosmic-text 集成后实现") }
 }
 ```
 
