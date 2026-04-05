@@ -136,4 +136,52 @@ impl ResolvedPos {
         let bump = if depth == self.depth && at_text_start { 0 } else { 1 };
         self.path[depth].index + bump
     }
+
+    /// The (absolute) position at the start of the node at the given depth.
+    pub fn start(&self, depth: Option<i32>) -> usize {
+        let depth = self.resolve_depth(depth);
+        if depth == 0 { 0 } else { self.path[depth - 1].start_pos + 1 }
+    }
+
+    /// The (absolute) position at the end of the node at the given depth.
+    pub fn end(&self, depth: Option<i32>) -> usize {
+        let depth = self.resolve_depth(depth);
+        // start(depth) + node(depth).content.size
+        let start = if depth == 0 { 0 } else { self.path[depth - 1].start_pos + 1 };
+        start + self.path[depth].node.content.size
+    }
+
+    /// The (absolute) position directly before the wrapping node at the given depth.
+    ///
+    /// When `depth == self.depth + 1`, returns `self.pos` (the original position).
+    /// Returns `Err(RangeError)` at depth 0 (no position before the root).
+    pub fn before(&self, depth: Option<i32>) -> Result<usize, RangeError> {
+        let depth = self.resolve_depth(depth);
+        if depth == 0 {
+            return Err(RangeError("There is no position before the top-level node".to_string()));
+        }
+        if depth == self.depth + 1 {
+            return Ok(self.pos);
+        }
+        Ok(self.path[depth - 1].start_pos)
+    }
+
+    /// The (absolute) position directly after the wrapping node at the given depth.
+    pub fn after(&self, depth: Option<i32>) -> Result<usize, RangeError> {
+        let depth = self.resolve_depth(depth);
+        if depth == 0 {
+            return Err(RangeError("There is no position after the top-level node".to_string()));
+        }
+        if depth == self.depth + 1 {
+            return Ok(self.pos);
+        }
+        Ok(self.path[depth - 1].start_pos + self.path[depth].node.node_size())
+    }
+
+    /// When this position points into a text node, this returns the distance
+    /// between the position and the start of the text node. Will be zero for
+    /// positions that point between nodes.
+    pub fn text_offset(&self) -> usize {
+        self.pos - self.path[self.depth].start_pos
+    }
 }

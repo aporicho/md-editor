@@ -339,3 +339,102 @@ fn index_after_increments_when_depth_not_self_depth() {
     assert_eq!(rp.index_after(Some(0)), 2);
     assert_eq!(rp.index_after(Some(1)), 1); // index(1)=0, +1=1
 }
+
+// --- Task 2: 位置访问器测试 ---
+
+#[test]
+fn start_returns_zero_at_depth_zero() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.start(Some(0)), 0);
+}
+
+#[test]
+fn start_returns_inner_content_start_at_deeper_depths() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // path=[(doc,1,4),(blk,0,5),(p2,0,6)]
+    // start(1) = path[0].start_pos + 1 = 4+1 = 5(blockquote content 开始)
+    // start(2) = path[1].start_pos + 1 = 5+1 = 6(p2 content 开始)
+    assert_eq!(rp.start(Some(1)), 5);
+    assert_eq!(rp.start(Some(2)), 6);
+    // None 默认 = self.depth = 2
+    assert_eq!(rp.start(None), 6);
+}
+
+#[test]
+fn end_is_start_plus_content_size() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // end(0) = 0 + doc.content.size = 12
+    // end(1) = 5 + blk.content.size = 5+6 = 11(p2.node_size=6)
+    // end(2) = 6 + p2.content.size = 6+4 = 10(text.node_size=4)
+    assert_eq!(rp.end(Some(0)), 12);
+    assert_eq!(rp.end(Some(1)), 11);
+    assert_eq!(rp.end(Some(2)), 10);
+}
+
+#[test]
+fn text_offset_is_pos_minus_deepest_start_pos() {
+    let d = test_doc();
+    // pos=7,deepest frame start_pos=6 ⇒ text_offset = 1
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.text_offset(), 1);
+    // pos=0,deepest frame(doc,0,0).start_pos=0 ⇒ text_offset=0
+    let rp0 = ResolvedPos::resolve(&d, 0).unwrap();
+    assert_eq!(rp0.text_offset(), 0);
+    // pos=4,deepest(doc,1,4).start_pos=4 ⇒ text_offset=0
+    let rp4 = ResolvedPos::resolve(&d, 4).unwrap();
+    assert_eq!(rp4.text_offset(), 0);
+}
+
+#[test]
+fn before_errors_at_depth_zero() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let err = rp.before(Some(0)).err().unwrap();
+    assert!(err.0.contains("no position before the top-level node"));
+}
+
+#[test]
+fn before_returns_pos_when_depth_equals_self_depth_plus_one() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap(); // self.depth=2
+    // before(3) = before(self.depth+1) ⇒ self.pos = 7
+    assert_eq!(rp.before(Some(3)).unwrap(), 7);
+}
+
+#[test]
+fn before_returns_frame_start_pos_otherwise() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // before(1) = path[0].start_pos = 4(blockquote 的 open tag 位置)
+    // before(2) = path[1].start_pos = 5(p2 的 open tag 位置)
+    assert_eq!(rp.before(Some(1)).unwrap(), 4);
+    assert_eq!(rp.before(Some(2)).unwrap(), 5);
+}
+
+#[test]
+fn after_errors_at_depth_zero() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let err = rp.after(Some(0)).err().unwrap();
+    assert!(err.0.contains("no position after the top-level node"));
+}
+
+#[test]
+fn after_returns_pos_when_depth_equals_self_depth_plus_one() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.after(Some(3)).unwrap(), 7);
+}
+
+#[test]
+fn after_returns_frame_start_plus_node_size_otherwise() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    // after(1) = path[0].start_pos + path[1].node.node_size() = 4 + 8 = 12(blockquote 关闭后的位置)
+    // after(2) = path[1].start_pos + path[2].node.node_size() = 5 + 6 = 11(p2 关闭后的位置)
+    assert_eq!(rp.after(Some(1)).unwrap(), 12);
+    assert_eq!(rp.after(Some(2)).unwrap(), 11);
+}
