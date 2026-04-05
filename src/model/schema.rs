@@ -5,6 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 use indexmap::IndexMap;
 use serde_json::Value;
+use typed_builder::TypedBuilder;
 
 use crate::model::render_output::RenderOutput;
 
@@ -14,15 +15,15 @@ use crate::model::render_output::RenderOutput;
 pub type Attrs = Arc<HashMap<String, Value>>;
 
 /// Rendering hook type for a node: given a node's attrs, returns a RenderOutput.
-pub type NodeRenderFn = Box<dyn Fn(&Value) -> RenderOutput + Send + Sync>;
+pub type NodeRenderFn = Arc<dyn Fn(&Value) -> RenderOutput + Send + Sync>;
 /// Leaf text extractor type for a node: given a node's attrs, returns a plain-text string.
-pub type NodeLeafTextFn = Box<dyn Fn(&Value) -> String + Send + Sync>;
+pub type NodeLeafTextFn = Arc<dyn Fn(&Value) -> String + Send + Sync>;
 /// Debug string producer type for a node.
-pub type NodeDebugFn = Box<dyn Fn(&Value) -> String + Send + Sync>;
+pub type NodeDebugFn = Arc<dyn Fn(&Value) -> String + Send + Sync>;
 /// Rendering hook type for a mark: given mark attrs and whether it's an opening mark.
-pub type MarkRenderFn = Box<dyn Fn(&Value, bool) -> RenderOutput + Send + Sync>;
+pub type MarkRenderFn = Arc<dyn Fn(&Value, bool) -> RenderOutput + Send + Sync>;
 /// Custom attribute validator function type.
-pub type AttrValidatorFn = Box<dyn Fn(&Value) -> Result<(), String> + Send + Sync>;
+pub type AttrValidatorFn = Arc<dyn Fn(&Value) -> Result<(), String> + Send + Sync>;
 
 /// Whitespace handling mode for a node type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +59,7 @@ impl ExcludeSpec {
 }
 
 /// Validates attribute values. Used in AttrSpec.
+#[derive(Clone)]
 pub enum AttrValidator {
     /// A `|`-separated list of allowed JSON primitive type names
     /// (e.g. `"string|null"`). Validated against the JSON value's type name.
@@ -78,11 +80,13 @@ impl fmt::Debug for AttrValidator {
 /// Used to define attributes on nodes or marks.
 ///
 /// Corresponds to `AttributeSpec` in TypeScript.
-#[derive(Debug)]
+#[derive(TypedBuilder, Clone, Debug)]
 pub struct AttrSpec {
     /// The default value for this attribute. `None` means the attribute is required.
+    #[builder(default)]
     pub default: Option<Value>,
     /// Optional validator for this attribute's value.
+    #[builder(default)]
     pub validate: Option<AttrValidator>,
 }
 
@@ -121,43 +125,62 @@ impl AttrSpec {
 /// Corresponds to `NodeSpec` interface in TypeScript.
 /// DOM-related fields (toDOM, parseDOM) are replaced by rendering hooks
 /// for the cosmic-text layer. See design doc for rationale.
+#[derive(TypedBuilder, Clone)]
 pub struct NodeSpec {
     /// The content expression for this node (e.g. `"block+"`, `"inline*"`).
+    #[builder(default)]
     pub content: Option<String>,
     /// Space-separated mark names/groups allowed inside this node.
     /// `"_"` = all marks, `""` = no marks, `None` = default (all for inline content).
+    #[builder(default)]
     pub marks: Option<String>,
     /// Space-separated group names this node belongs to (e.g. `"block"`).
+    #[builder(default)]
     pub group: Option<String>,
     /// Should be set to true for inline nodes (implied for text nodes).
+    #[builder(default)]
     pub inline: bool,
     /// True for nodes that are not leaf nodes but don't have directly editable content.
+    #[builder(default)]
     pub atom: bool,
     /// Attribute specs for this node type.
+    #[builder(default = IndexMap::new())]
     pub attrs: IndexMap<String, AttrSpec>,
     /// Whether this node can be selected as a node selection. Defaults to true.
+    #[builder(default = true)]
     pub selectable: bool,
     /// Whether this node can be dragged without being selected. Defaults to false.
+    #[builder(default)]
     pub draggable: bool,
     /// Whether this node contains code (affects some command behavior).
+    #[builder(default)]
     pub code: bool,
     /// Whitespace handling override. Defaults to `Pre` when `code` is true.
+    #[builder(default)]
     pub whitespace: Option<Whitespace>,
     /// When enabled, enables both `defining_as_context` and `defining_for_content`.
+    #[builder(default)]
     pub defining: bool,
     /// Whether this node is a context-defining parent during replace operations.
+    #[builder(default)]
     pub defining_as_context: bool,
     /// Whether this node is a content-defining wrapper during replace operations.
+    #[builder(default)]
     pub defining_for_content: bool,
     /// Whether editing operations won't cross node boundaries.
+    #[builder(default)]
     pub isolating: bool,
     /// Whether this inline leaf node acts as a linebreak replacement.
+    #[builder(default)]
     pub linebreak_replacement: bool,
     /// Rendering hook (cosmic-text placeholder). Called to render a node.
+    #[builder(default, setter(strip_option))]
     pub to_render: Option<NodeRenderFn>,
     /// Returns a plain-text string for leaf node content (used in textBetween).
+    #[builder(default, setter(strip_option))]
     pub leaf_text: Option<NodeLeafTextFn>,
     /// Returns a debug string representation of this node.
+    #[builder(default, setter(strip_option))]
     pub to_debug_string: Option<NodeDebugFn>,
 }
 
@@ -189,21 +212,29 @@ impl Default for NodeSpec {
 /// A description of a mark type, used when defining a schema.
 ///
 /// Corresponds to `MarkSpec` interface in TypeScript.
+#[derive(TypedBuilder, Clone)]
 pub struct MarkSpec {
     /// Attribute specs for this mark type.
+    #[builder(default = IndexMap::new())]
     pub attrs: IndexMap<String, AttrSpec>,
     /// Whether this mark is active at the cursor when positioned at its end. Defaults to true.
+    #[builder(default = true)]
     pub inclusive: bool,
     /// Space-separated mark names/groups this mark excludes.
     /// `"_"` = all, `""` = none, `None` = only excludes itself (default).
+    #[builder(default)]
     pub excludes: Option<String>,
     /// Space-separated group names this mark belongs to.
+    #[builder(default)]
     pub group: Option<String>,
     /// Whether this mark spans multiple adjacent nodes when serialized. Defaults to true.
+    #[builder(default = true)]
     pub spanning: bool,
     /// Whether this mark's content is code.
+    #[builder(default)]
     pub code: bool,
     /// Rendering hook (cosmic-text placeholder). Called to render a mark.
+    #[builder(default, setter(strip_option))]
     pub to_render: Option<MarkRenderFn>,
 }
 
@@ -291,7 +322,7 @@ mod tests {
     fn attr_spec_validate_func() {
         let spec = AttrSpec {
             default: None,
-            validate: Some(AttrValidator::Func(Box::new(|v| {
+            validate: Some(AttrValidator::Func(Arc::new(|v| {
                 if v.is_number() { Ok(()) } else { Err("not a number".to_string()) }
             }))),
         };
@@ -337,4 +368,44 @@ mod tests {
         assert!(es.excludes("em", "code"));
         assert!(!es.excludes("em", "link"));
     }
+
+    #[test]
+    fn node_spec_builder_defaults() {
+        let spec = NodeSpec::builder().build();
+        assert!(spec.content.is_none());
+        assert!(spec.selectable);
+        assert!(!spec.inline);
+    }
+
+    #[test]
+    fn node_spec_builder_with_content() {
+        let spec = NodeSpec::builder()
+            .content(Some("block+".to_string()))
+            .group(Some("block".to_string()))
+            .build();
+        assert_eq!(spec.content.as_deref(), Some("block+"));
+        assert_eq!(spec.group.as_deref(), Some("block"));
+        assert!(spec.selectable);
+    }
+
+    #[test]
+    fn mark_spec_builder_defaults() {
+        let spec = MarkSpec::builder().build();
+        assert!(spec.inclusive);
+        assert!(spec.spanning);
+        assert!(!spec.code);
+    }
+
+    #[test]
+    fn attr_spec_builder() {
+        let spec = AttrSpec::builder()
+            .default(Some(json!(42)))
+            .build();
+        assert_eq!(spec.default, Some(json!(42)));
+        assert!(spec.validate.is_none());
+    }
 }
+
+// Suppress unused import warning for fmt (only used in removed manual Debug impl)
+#[allow(unused_imports)]
+use fmt as _;
