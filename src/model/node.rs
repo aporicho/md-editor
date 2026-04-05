@@ -110,12 +110,12 @@ impl Node {
 
     /// Concatenates all the text nodes found in this fragment and its children.
     pub fn text_content(&self) -> String {
-        if self.node_type.is_leaf() {
-            if let Some(ref lf) = self.node_type.spec.leaf_text {
-                return lf(&Value::Object(
-                    self.attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                ));
-            }
+        if self.node_type.is_leaf()
+            && let Some(ref lf) = self.node_type.spec.leaf_text
+        {
+            return lf(&Value::Object(
+                self.attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            ));
         }
         self.text_between(0, self.content.size, Some(""), None)
     }

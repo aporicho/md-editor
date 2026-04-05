@@ -50,20 +50,19 @@ impl Fragment {
         let mut nodes: Vec<Node> = Vec::with_capacity(array.len());
         let mut size = 0usize;
         for node in array {
-            if node.is_text() {
-                if let Some(last) = nodes.last_mut() {
-                    if last.is_text() && last.same_markup(node) {
-                        let combined = format!(
-                            "{}{}",
-                            last.text.as_deref().unwrap_or(""),
-                            node.text.as_deref().unwrap_or("")
-                        );
-                        size -= last.node_size();
-                        last.text = Some(combined);
-                        size += last.node_size();
-                        continue;
-                    }
-                }
+            if node.is_text()
+                && let Some(last) = nodes.last_mut()
+                && last.is_text() && last.same_markup(node)
+            {
+                let combined = format!(
+                    "{}{}",
+                    last.text.as_deref().unwrap_or(""),
+                    node.text.as_deref().unwrap_or("")
+                );
+                size -= last.node_size();
+                last.text = Some(combined);
+                size += last.node_size();
+                continue;
             }
             size += node.node_size();
             nodes.push(node.clone());
@@ -196,13 +195,12 @@ impl Fragment {
                 if node.node_type.is_block
                     && (node.node_type.is_leaf() && !node_text.is_empty()
                         || node.node_type.inline_content)
+                    && let Some(sep) = block_separator
                 {
-                    if let Some(sep) = block_separator {
-                        if first {
-                            first = false;
-                        } else {
-                            text.push_str(sep);
-                        }
+                    if first {
+                        first = false;
+                    } else {
+                        text.push_str(sep);
                     }
                 }
                 text.push_str(&node_text);
@@ -225,18 +223,17 @@ impl Fragment {
         let mut content: Vec<Node> = self.content.to_vec();
         let mut i = 0usize;
         // Try to merge last of self with first of other (text nodes with same markup)
-        if let Some(first_other) = other.content.first() {
-            if let Some(last) = content.last_mut() {
-                if last.is_text() && first_other.is_text() && last.same_markup(first_other) {
-                    let combined = format!(
-                        "{}{}",
-                        last.text.as_deref().unwrap_or(""),
-                        first_other.text.as_deref().unwrap_or("")
-                    );
-                    last.text = Some(combined);
-                    i = 1;
-                }
-            }
+        if let Some(first_other) = other.content.first()
+            && let Some(last) = content.last_mut()
+            && last.is_text() && first_other.is_text() && last.same_markup(first_other)
+        {
+            let combined = format!(
+                "{}{}",
+                last.text.as_deref().unwrap_or(""),
+                first_other.text.as_deref().unwrap_or("")
+            );
+            last.text = Some(combined);
+            i = 1;
         }
         for node in other.content[i..].iter() {
             content.push(node.clone());

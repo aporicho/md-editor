@@ -443,54 +443,83 @@ impl NodeType {
             .is_none_or(|set| set.iter().any(|m| Arc::ptr_eq(m, mark_type)))
     }
 
-    // ---- Phase 3 stubs (依赖 Fragment / Node / Mark) ----
+    // ---- Phase 3 implementations ----
 
     /// Create a `Node` of this type.
     ///
-    /// NOTE: stub — requires Node/Fragment/Mark (Phase 3).
-    #[allow(unused)]
-    pub fn create_stub(&self) -> ! {
-        todo!("NodeType::create requires Node/Fragment/Mark — implement in Phase 3")
+    /// Create a `Node` of this type. The given attributes are
+    /// checked and defaulted (you can pass `None` to use the type's
+    /// defaults entirely, if no required attributes exist). `content`
+    /// may be a `Fragment` or `None`.
+    pub fn create(
+        self: &Arc<Self>,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+        content: Option<crate::model::fragment::Fragment>,
+        marks: Vec<crate::model::mark::Mark>,
+    ) -> Result<crate::model::node::Node, crate::model::errors::SchemaError> {
+        if self.is_text {
+            return Err(crate::model::errors::SchemaError(
+                "NodeType.create can't construct text nodes".to_string(),
+            ));
+        }
+        let attrs = self.compute_attrs_for(attrs)?;
+        let content = content.unwrap_or_else(crate::model::fragment::Fragment::empty);
+        Ok(crate::model::node::Node::new(self.clone(), attrs, content, marks))
     }
 
     /// Like `create`, but check the given content against the node type's content restrictions.
     ///
-    /// NOTE: stub — requires Fragment (Phase 3).
-    #[allow(unused)]
-    pub fn create_checked_stub(&self) -> ! {
-        todo!("NodeType::create_checked requires Fragment — implement in Phase 3")
+    /// Like `create`, but check the given content
+    /// against the node type's content restrictions, and return an error
+    /// if it doesn't match.
+    ///
+    /// NOTE: full content validation (valid_content) requires match_fragment (Phase 3.4).
+    /// For now, creates without content check; Phase 3.4 will enable the check.
+    pub fn create_checked(
+        self: &Arc<Self>,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+        content: Option<crate::model::fragment::Fragment>,
+        marks: Vec<crate::model::mark::Mark>,
+    ) -> Result<crate::model::node::Node, crate::model::errors::RangeError> {
+        let attrs = self.compute_attrs_for(attrs).map_err(|e| crate::model::errors::RangeError(e.0))?;
+        let content = content.unwrap_or_else(crate::model::fragment::Fragment::empty);
+        Ok(crate::model::node::Node::new(self.clone(), attrs, content, marks))
     }
 
     /// Like `create`, but fill in missing content automatically.
     ///
-    /// NOTE: stub — requires Fragment (Phase 3).
+    /// NOTE: stub — requires match_fragment (Phase 3.4).
     #[allow(unused)]
     pub fn create_and_fill_stub(&self) -> ! {
-        todo!("NodeType::create_and_fill requires Fragment — implement in Phase 3")
+        todo!("NodeType::create_and_fill requires match_fragment — implement in Phase 3.4")
     }
 
     /// Returns true if the given fragment is valid content for this node type.
     ///
-    /// NOTE: stub — requires Fragment (Phase 3).
+    /// NOTE: stub — requires match_fragment (Phase 3.4).
     #[allow(unused)]
     pub fn valid_content_stub(&self) -> ! {
-        todo!("NodeType::valid_content requires Fragment — implement in Phase 3")
+        todo!("NodeType::valid_content requires match_fragment — implement in Phase 3.4")
     }
 
     /// Test whether the given set of marks are allowed in this node.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn allows_marks_stub(&self) -> ! {
-        todo!("NodeType::allows_marks requires Mark — implement in Phase 3")
+    /// Test whether the given set of marks are allowed in this node.
+    pub fn allows_marks(&self, marks: &[crate::model::mark::Mark]) -> bool {
+        if self.mark_set.is_none() {
+            return true;
+        }
+        marks.iter().all(|m| self.allows_mark_type(&m.mark_type))
     }
 
     /// Removes the marks that are not allowed in this node from the given set.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn allowed_marks_stub(&self) -> ! {
-        todo!("NodeType::allowed_marks requires Mark — implement in Phase 3")
+    /// Removes the marks that are not allowed in this node from the given set.
+    pub fn allowed_marks(&self, marks: &[crate::model::mark::Mark]) -> Vec<crate::model::mark::Mark> {
+        if self.mark_set.is_none() {
+            return marks.to_vec();
+        }
+        marks.iter().filter(|m| self.allows_mark_type(&m.mark_type)).cloned().collect()
     }
 }
 
@@ -873,46 +902,65 @@ impl Schema {
         })
     }
 
-    // ---- Phase 3 stubs (依赖 Node / Fragment / Mark) ----
+    // ---- Phase 3 implementations ----
 
     /// Create a node in this schema.
     ///
-    /// NOTE: stub — requires Node/Fragment/Mark (Phase 3).
-    #[allow(unused)]
-    pub fn node_stub(&self) -> ! {
-        todo!("Schema::node requires Node/Fragment/Mark — implement in Phase 3")
+    /// Create a node in this schema. The `type` may be a string or a
+    /// `NodeType` instance. Attributes will be extended with defaults,
+    /// `content` may be a `Fragment`, `null`, a `Node`, or an array of
+    /// nodes.
+    pub fn node(
+        &self,
+        type_name: &str,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+        content: Option<crate::model::fragment::Fragment>,
+        marks: Vec<crate::model::mark::Mark>,
+    ) -> Result<crate::model::node::Node, crate::model::errors::SchemaError> {
+        let nt = self.node_type(type_name)?;
+        nt.create(attrs, content, marks)
     }
 
-    /// Create a text node in the schema.
+    /// Create a text node in the schema. Empty text nodes are not allowed.
     ///
-    /// NOTE: stub — requires Node (Phase 3).
-    #[allow(unused)]
-    pub fn text_stub(&self) -> ! {
-        todo!("Schema::text requires Node — implement in Phase 3")
+    /// Create a text node in the schema. Empty text nodes are not allowed.
+    pub fn text(
+        &self,
+        text: String,
+        marks: Vec<crate::model::mark::Mark>,
+    ) -> crate::model::node::Node {
+        let text_type = self.nodes["text"].clone();
+        let attrs = text_type.default_attrs.clone()
+            .unwrap_or_else(|| Arc::new(Default::default()));
+        crate::model::node::Node::text_node(text_type, attrs, text, marks)
     }
 
     /// Create a mark with the given type and attributes.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn mark_stub(&self) -> ! {
-        todo!("Schema::mark requires Mark — implement in Phase 3")
+    /// Create a mark with the given type and attributes.
+    pub fn mark(
+        &self,
+        type_name: &str,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::model::mark::Mark, crate::model::errors::SchemaError> {
+        let mt = self.mark_type(type_name)?;
+        mt.create(mt, attrs)
     }
 
     /// Deserialize a node from its JSON representation.
-    ///
-    /// NOTE: stub — requires Node (Phase 3).
-    #[allow(unused)]
-    pub fn node_from_json_stub(&self) -> ! {
-        todo!("Schema::node_from_json requires Node — implement in Phase 3")
+    pub fn node_from_json(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<crate::model::node::Node, crate::model::errors::RangeError> {
+        crate::model::node::Node::from_json(self, json)
     }
 
     /// Deserialize a mark from its JSON representation.
-    ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn mark_from_json_stub(&self) -> ! {
-        todo!("Schema::mark_from_json requires Mark — implement in Phase 3")
+    pub fn mark_from_json(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<crate::model::mark::Mark, crate::model::errors::RangeError> {
+        crate::model::mark::Mark::from_json(self, json)
     }
 }
 
