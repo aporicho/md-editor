@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::model::errors::RangeError;
 use crate::model::fragment::Fragment;
+use crate::model::node::Node;
 use crate::model::schema::Schema;
 
 static EMPTY_SLICE: OnceLock<Slice> = OnceLock::new();
@@ -146,6 +147,19 @@ impl Slice {
         )?;
         Ok(Slice::new(new_content, self.open_start, self.open_end))
     }
+
+    /// @internal — insert `fragment` at slice-relative position `pos`.
+    /// Returns `None` when the insertion would violate content constraints
+    /// at a nested level.
+    pub fn insert_at(&self, pos: usize, fragment: &Fragment) -> Option<Slice> {
+        let new_content = insert_into(
+            &self.content,
+            pos + self.open_start,
+            fragment,
+            None,
+        )?;
+        Some(Slice::new(new_content, self.open_start, self.open_end))
+    }
 }
 
 /// Internal: remove a flat range [from, to) from a fragment.
@@ -179,4 +193,39 @@ fn remove_range(content: &Fragment, from: usize, to: usize) -> Result<Fragment, 
         .expect("remove_range: child must exist when offset != from");
     let inner = remove_range(&child.content, from - offset - 1, to - offset - 1)?;
     Ok(content.replace_child(index, child.copy(Some(inner))))
+}
+
+/// Internal: insert `insert` into `content` at byte position `dist`.
+///
+/// `parent` is `None` at the top-level call and `Some(child)` when descending
+/// into a child node. When `parent` is provided, we check `parent.can_replace`
+/// before inserting, returning `None` if the insertion would produce invalid
+/// structure.
+fn insert_into(
+    content: &Fragment,
+    dist: usize,
+    insert: &Fragment,
+    parent: Option<&Node>,
+) -> Option<Fragment> {
+    let (index, offset) = content.find_index(dist).ok()?;
+    let child_is_text = content.maybe_child(index).map(|n| n.is_text()).unwrap_or(false);
+
+    if offset == dist || child_is_text {
+        // 边界或文本节点内部 ⇒ 平凡插入
+        if let Some(p) = parent
+            && !p.can_replace(index, index, insert, 0, insert.child_count())
+        {
+            return None;
+        }
+        return Some(
+            content.cut(0, Some(dist))
+                .append(insert)
+                .append(&content.cut(dist, None)),
+        );
+    }
+
+    // dist 在一个非文本子节点内部 ⇒ 递归下降
+    let child = content.maybe_child(index)?;
+    let inner = insert_into(&child.content, dist - offset - 1, insert, Some(child))?;
+    Some(content.replace_child(index, child.copy(Some(inner))))
 }

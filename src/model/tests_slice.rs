@@ -350,3 +350,86 @@ fn remove_between_respects_open_start_offset() {
     let expected = Fragment::from_node(p(&[t("cde")]));
     assert!(result.content.eq(&expected));
 }
+
+#[test]
+fn insert_at_into_text_node() {
+    // content = Fragment[p("hello")], open=1/1
+    // pos=2 ⇒ dist=3(跳过 open_start、"he"),插入 Fragment[t("X")]
+    // 结果:p("heXllo")
+    let s = Slice::new(Fragment::from_node(p(&[t("hello")])), 1, 1);
+    let insert = Fragment::from_node(t("X"));
+    let result = s.insert_at(2, &insert).unwrap();
+    let expected = Fragment::from_node(p(&[t("heXllo")]));
+    assert!(result.content.eq(&expected));
+    assert_eq!(result.open_start, 1);
+    assert_eq!(result.open_end, 1);
+}
+
+#[test]
+fn insert_at_at_node_boundary() {
+    // content = Fragment[p("a"), p("b")] size=6, open=0/0
+    // pos=3(落在两段之间,offset==dist)
+    // 插入 Fragment[p("M")]
+    // 结果:Fragment[p("a"), p("M"), p("b")]
+    let frag = Fragment::from_array(&[p(&[t("a")]), p(&[t("b")])]);
+    let s = Slice::new(frag, 0, 0);
+    let insert = Fragment::from_node(p(&[t("M")]));
+    let result = s.insert_at(3, &insert).unwrap();
+    let expected = Fragment::from_array(&[p(&[t("a")]), p(&[t("M")]), p(&[t("b")])]);
+    assert!(result.content.eq(&expected));
+}
+
+#[test]
+fn insert_at_top_level_unchecked_by_design() {
+    // 顶层调用 insert_into 不传 parent,所以即使插入的片段本身
+    // 在 Fragment 语义下"意义不明"也会插入(只要位置合法)。
+    // 这里插入一个 doc 节点到 doc 节点之间 —— Fragment 不做结构校验。
+    let s = Slice::new(Fragment::from_node(p(&[t("a")])), 0, 0);
+    // 在 p 节点外部(pos=0,边界)插入另一个 p
+    let insert = Fragment::from_node(p(&[t("B")]));
+    let result = s.insert_at(0, &insert).unwrap();
+    let expected = Fragment::from_array(&[p(&[t("B")]), p(&[t("a")])]);
+    assert!(result.content.eq(&expected));
+}
+
+#[test]
+fn insert_at_descends_into_child_and_checks_can_replace() {
+    // content = Fragment[p("ab")] size=4, open=0/0
+    // 试图在 p 内部 pos=1(dist=1,offset=0)插入另一个 p 节点
+    // dist=1 落在 p 内部非文本分支?不,p 的子是 t("ab"),是文本
+    // 所以触发 "child.is_text() == true" 分支,会检查 parent.can_replace
+    // paragraph 不允许 paragraph 作为子 ⇒ 返回 None
+    let s = Slice::new(Fragment::from_node(p(&[t("ab")])), 0, 0);
+    let insert = Fragment::from_node(p(&[t("X")]));
+    let result = s.insert_at(1, &insert);
+    assert!(result.is_none());
+}
+
+#[test]
+fn insert_at_into_nested_blockquote() {
+    // content = Fragment[blockquote(p("a"))] size=6, open=0/0
+    // pos=2 ⇒ 穿过 blockquote 的 open(1)和 p 的 open(1),
+    // 停在 p 的文本 "a" 之前
+    // dist=2,blockquote 的 first_child 是 p,offset=0+1=1 所以 dist-offset-1=0
+    // 然后进入 p,dist=0,insert 文本 t("Z") ⇒ p("Za")
+    let frag = Fragment::from_node(blockquote(&[p(&[t("a")])]));
+    let s = Slice::new(frag, 0, 0);
+    let insert = Fragment::from_node(t("Z"));
+    let result = s.insert_at(2, &insert).unwrap();
+    let expected = Fragment::from_node(blockquote(&[p(&[t("Za")])]));
+    assert!(result.content.eq(&expected));
+}
+
+#[test]
+fn insert_at_respects_open_start_offset() {
+    // content = Fragment[p("xy")] size=4, open_start=1, open_end=1
+    // pos=0 ⇒ dist = 0 + 1 = 1,相当于在 "x" 之前
+    // 插入 t("N") ⇒ p("Nxy")
+    let s = Slice::new(Fragment::from_node(p(&[t("xy")])), 1, 1);
+    let insert = Fragment::from_node(t("N"));
+    let result = s.insert_at(0, &insert).unwrap();
+    let expected = Fragment::from_node(p(&[t("Nxy")]));
+    assert!(result.content.eq(&expected));
+    assert_eq!(result.open_start, 1);
+    assert_eq!(result.open_end, 1);
+}
