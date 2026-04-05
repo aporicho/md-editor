@@ -439,28 +439,42 @@ impl Node {
             .match_fragment(&self.content, 0, index)
     }
 
-    /// NOTE: stub — requires ContentMatch::match_fragment (Phase 3.4).
-    #[allow(unused)]
-    pub fn can_replace_stub(&self) -> ! {
-        todo!("Node::can_replace requires match_fragment — Phase 3.4")
+    /// Check whether this node and its descendants conform to the schema,
+    /// returning an error if they do not.
+    ///
+    /// Checks content validity, attribute validity, and mark set validity.
+    pub fn check(&self) -> Result<(), crate::model::errors::RangeError> {
+        todo!("Node::check: implement in Phase 3.4-c")
     }
 
-    /// NOTE: stub — requires ContentMatch::match_fragment (Phase 3.4).
-    #[allow(unused)]
-    pub fn can_replace_with_stub(&self) -> ! {
-        todo!("Node::can_replace_with requires match_fragment — Phase 3.4")
+    /// Test whether replacing the range `from` to `to` (by child index) with
+    /// the given fragment (from `start` to `end`) would leave this node's content valid.
+    pub fn can_replace(
+        &self,
+        from: usize,
+        to: usize,
+        replacement: &crate::model::fragment::Fragment,
+        start: usize,
+        end: usize,
+    ) -> bool {
+        todo!("Node::can_replace: implement in Phase 3.4-c")
     }
 
-    /// NOTE: stub — requires ContentMatch (Phase 3.4).
-    #[allow(unused)]
-    pub fn can_append_stub(&self) -> ! {
-        todo!("Node::can_append requires match_fragment — Phase 3.4")
+    /// Test whether replacing the range `from` to `to` (by child index) with
+    /// a node of the given type would leave this node's content valid.
+    pub fn can_replace_with(
+        &self,
+        from: usize,
+        to: usize,
+        type_name: &str,
+        marks: &[crate::model::mark::Mark],
+    ) -> bool {
+        todo!("Node::can_replace_with: implement in Phase 3.4-c")
     }
 
-    /// NOTE: stub — requires valid_content (Phase 3.4).
-    #[allow(unused)]
-    pub fn check_stub(&self) -> ! {
-        todo!("Node::check requires valid_content — Phase 3.4")
+    /// Test whether the given node's content could be appended to this node.
+    pub fn can_append(&self, other: &Node) -> bool {
+        todo!("Node::can_append: implement in Phase 3.4-c")
     }
 
     /// NOTE: stub — requires Slice + ResolvedPos (Phase 4).

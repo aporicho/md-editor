@@ -371,4 +371,42 @@ mod tests {
             None,
         )
     }
+
+    // -----------------------------------------------------------------------
+    // find_wrapping() tests (3)
+    // -----------------------------------------------------------------------
+
+    /// 从 doc 的 content match ("block+") 找 paragraph 的包裹：不需要包裹，返回 Some([])。
+    #[test]
+    fn find_wrapping_direct_fit() {
+        let schema = test_schema();
+        let doc_cm = &schema.nodes["doc"].content_match;
+        // paragraph 在 block group 中，doc 的 content match 直接接受 paragraph
+        let result = doc_cm.find_wrapping("paragraph");
+        assert_eq!(result, Some(vec![]), "paragraph fits directly in doc, no wrapping needed");
+    }
+
+    /// 从 doc 的 content match ("block+") 找 list_item 的包裹：需要 bullet_list 包裹。
+    #[test]
+    fn find_wrapping_one_level() {
+        let schema = test_schema();
+        let doc_cm = &schema.nodes["doc"].content_match;
+        // list_item 不在 block group 中，但 bullet_list（block group 成员）接受 list_item
+        let result = doc_cm.find_wrapping("list_item");
+        assert_eq!(
+            result,
+            Some(vec!["bullet_list".to_string()]),
+            "list_item needs bullet_list as wrapper"
+        );
+    }
+
+    /// 从 paragraph 的 content match ("inline*") 找 bullet_list 的包裹：不可能，返回 None。
+    #[test]
+    fn find_wrapping_impossible() {
+        let schema = test_schema();
+        let para_cm = &schema.nodes["paragraph"].content_match;
+        // paragraph 只接受 inline 节点；所有 inline 节点都是叶节点，无法包裹 block 节点
+        let result = para_cm.find_wrapping("bullet_list");
+        assert!(result.is_none(), "bullet_list cannot be wrapped inside paragraph's inline context");
+    }
 }

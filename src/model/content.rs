@@ -761,10 +761,15 @@ impl ContentMatch {
     /// Find a set of wrapping node type names that would allow a node of the given type
     /// to appear at this position.
     ///
-    /// NOTE: stub — requires NodeType.create_and_fill (Phase 3). Will be implemented in Phase 3.
-    #[allow(unused)]
-    pub fn find_wrapping_stub(&self) -> ! {
-        todo!("find_wrapping requires NodeType.create_and_fill — implement in Phase 3")
+    /// Returns `Some([])` when the target fits directly (no wrapping needed),
+    /// `Some([wrapper1, wrapper2, ...])` when wrapping is needed,
+    /// or `None` when no such wrapping exists.
+    /// Result is cached in `wrap_cache` by target name.
+    pub fn find_wrapping(
+        self: &Arc<Self>,
+        target: &str,
+    ) -> Option<Vec<String>> {
+        todo!("find_wrapping: implement in Phase 3.4-c")
     }
 }
 

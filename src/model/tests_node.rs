@@ -498,3 +498,88 @@ fn to_string_respected_by_fragment() {
     ]);
     assert_eq!(f.to_string_repr(), "<custom_text, custom_hard_break, custom_text>");
 }
+
+// ---- check tests ----
+
+#[test]
+fn check_notices_invalid_content() {
+    // doc directly containing list_item (not in block group) → invalid
+    use crate::model::fragment::Fragment;
+    let s = test_schema();
+    // li() builder creates list_item. We manually build doc with list_item child.
+    let li_node = li(&[p(&[t("x")])]);
+    let frag = Fragment::from_node(li_node);
+    let doc_node = s.nodes["doc"].create(None, Some(frag), vec![]).unwrap();
+    let result = doc_node.check();
+    assert!(result.is_err(), "expected Err for invalid content");
+    let err = result.unwrap_err();
+    assert!(
+        err.0.contains("Invalid content for node doc"),
+        "unexpected error: {}",
+        err.0
+    );
+}
+
+#[test]
+fn check_notices_marks_in_wrong_places() {
+    // paragraph node with em mark directly on the node (not on inline children)
+    // placed inside doc — doc doesn't allow marks on its children
+    use crate::model::fragment::Fragment;
+    let s = test_schema();
+    let em_mark = s.marks["em"].create(&s.marks["em"], None).unwrap();
+    // Create paragraph with no content but em mark on the node itself
+    let para = s.nodes["paragraph"].create(None, None, vec![em_mark]).unwrap();
+    let doc_node = s.nodes["doc"].create(None, Some(Fragment::from_node(para)), vec![]).unwrap();
+    let result = doc_node.check();
+    assert!(result.is_err(), "expected Err for marks in wrong place");
+    let err = result.unwrap_err();
+    assert!(
+        err.0.contains("Invalid content for node doc"),
+        "unexpected error: {}",
+        err.0
+    );
+}
+
+#[test]
+fn check_notices_incorrect_mark_sets() {
+    // text node with duplicate em marks [em, em] — should fail mark set validation
+    let s = test_schema();
+    let em1 = s.marks["em"].create(&s.marks["em"], None).unwrap();
+    let em2 = s.marks["em"].create(&s.marks["em"], None).unwrap();
+    let text_node = s.text("a".to_string(), vec![em1, em2]);
+    let result = text_node.check();
+    assert!(result.is_err(), "expected Err for duplicate marks");
+    let err = result.unwrap_err();
+    assert!(
+        err.0.contains("Invalid collection of marks"),
+        "unexpected error: {}",
+        err.0
+    );
+}
+
+#[test]
+fn check_notices_wrong_attribute_types() {
+    // image with src=true (boolean) — should fail string type validation
+    use std::collections::HashMap;
+    use serde_json::json;
+    let s = test_schema();
+    // Create image with src=true (wrong type: boolean instead of string)
+    let mut attrs: HashMap<String, serde_json::Value> = HashMap::new();
+    attrs.insert("src".to_string(), json!(true));
+    attrs.insert("alt".to_string(), json!(""));
+    attrs.insert("title".to_string(), json!(""));
+    let img_node = s.nodes["image"].create(Some(&attrs), None, vec![]).unwrap();
+    let result = img_node.check();
+    assert!(result.is_err(), "expected Err for wrong attribute type");
+    let err = result.unwrap_err();
+    assert!(
+        err.0.contains("Expected value of type"),
+        "unexpected error: {}",
+        err.0
+    );
+    assert!(
+        err.0.contains("src"),
+        "error should mention attribute name: {}",
+        err.0
+    );
+}
