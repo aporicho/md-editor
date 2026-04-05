@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::model::fragment::Fragment;
 use crate::model::node::Node;
 use crate::model::schema::{
-    AttrSpec, Attrs, MarkSpec, NodeSpec, Schema, SchemaSpec,
+    AttrSpec, AttrValidator, Attrs, MarkSpec, NodeSpec, Schema, SchemaSpec,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ pub fn test_schema() -> &'static Arc<Schema> {
                     attrs: indexmap! {
                         "src".to_string() => AttrSpec {
                             default: Some(json!("")),
-                            validate: None,
+                            validate: Some(AttrValidator::Types(vec!["string".to_string()])),
                         },
                         "alt".to_string() => AttrSpec {
                             default: Some(json!("")),

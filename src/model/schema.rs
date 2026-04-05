@@ -120,6 +120,51 @@ impl AttrSpec {
     }
 }
 
+/// 返回 serde_json Value 的 JavaScript-style 类型名，用于属性验证错误信息。
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// 验证 attrs 中每个字段是否符合 spec_attrs 的验证规则。
+/// 供 NodeType::check_attrs 和 MarkType::check_attrs 共用，避免重复代码。
+fn validate_attrs(
+    spec_attrs: &IndexMap<String, AttrSpec>,
+    attrs: &Attrs,
+    type_name: &str,
+) -> Result<(), crate::model::errors::RangeError> {
+    for (attr_name, spec) in spec_attrs {
+        let value = attrs.get(attr_name).unwrap_or(&Value::Null);
+        match &spec.validate {
+            Some(AttrValidator::Types(types)) => {
+                let actual = json_type_name(value);
+                if !types.iter().any(|t| t == actual) {
+                    return Err(crate::model::errors::RangeError(format!(
+                        "Expected value of type {} for attribute {} on type {}, got {}",
+                        types.join(","),
+                        attr_name,
+                        type_name,
+                        actual
+                    )));
+                }
+            }
+            Some(AttrValidator::Func(f)) => {
+                if let Err(msg) = f(value) {
+                    return Err(crate::model::errors::RangeError(msg));
+                }
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
 /// A description of a node type, used when defining a schema.
 ///
 /// Corresponds to `NodeSpec` interface in TypeScript.
@@ -534,6 +579,31 @@ impl NodeType {
         }
     }
 
+    /// 验证给定 fragment 是否为该节点类型的合法内容。
+    /// 若非法，返回 Err(RangeError("Invalid content for node {name}: ..."))。
+    pub fn check_content(
+        &self,
+        content: &crate::model::fragment::Fragment,
+    ) -> Result<(), crate::model::errors::RangeError> {
+        if !self.valid_content(content) {
+            return Err(crate::model::errors::RangeError(format!(
+                "Invalid content for node {}: {}",
+                self.name,
+                content.to_string_repr().chars().take(50).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
+    /// 验证属性值是否符合本节点类型的 AttrSpec 验证规则。
+    /// 错误格式：`Expected value of type {types} for attribute {attr} on type {name}, got {actual}`
+    pub fn check_attrs(
+        &self,
+        attrs: &Attrs,
+    ) -> Result<(), crate::model::errors::RangeError> {
+        validate_attrs(&self.spec.attrs, attrs, &self.name)
+    }
+
     /// Test whether the given set of marks are allowed in this node.
     ///
     /// Test whether the given set of marks are allowed in this node.
@@ -567,6 +637,14 @@ impl MarkType {
     /// Tells you whether this mark type has any required attributes.
     pub fn has_required_attrs(&self) -> bool {
         self.spec.attrs.values().any(|a| a.is_required())
+    }
+
+    /// 验证 mark 的属性值是否合法。
+    pub fn check_attrs(
+        &self,
+        attrs: &Attrs,
+    ) -> Result<(), crate::model::errors::RangeError> {
+        validate_attrs(&self.spec.attrs, attrs, &self.name)
     }
 
     /// Compute attributes, merging provided values with spec defaults.
