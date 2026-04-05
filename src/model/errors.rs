@@ -2,6 +2,7 @@ use std::fmt;
 
 /// Schema 构建或节点校验失败时抛出的错误。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct SchemaError(pub String);
 
 impl fmt::Display for SchemaError {
@@ -14,6 +15,7 @@ impl std::error::Error for SchemaError {}
 
 /// Node::replace 操作失败时抛出的错误。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct ReplaceError(pub String);
 
 impl fmt::Display for ReplaceError {
@@ -26,6 +28,7 @@ impl std::error::Error for ReplaceError {}
 
 /// ContentMatch::parse 解析内容表达式失败时抛出的错误。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct SyntaxError(pub String);
 
 impl fmt::Display for SyntaxError {
@@ -38,6 +41,7 @@ impl std::error::Error for SyntaxError {}
 
 /// 位置越界等范围错误。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct RangeError(pub String);
 
 impl fmt::Display for RangeError {

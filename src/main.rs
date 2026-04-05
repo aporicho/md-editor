@@ -27,7 +27,7 @@ impl App {
         Task::none()
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         "md-editor".into()
     }
 }

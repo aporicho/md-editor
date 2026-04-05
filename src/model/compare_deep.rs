@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 /// Recursively compare two JSON values for deep equality.
+#[allow(dead_code)]
 pub fn compare_deep(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
@@ -12,7 +13,7 @@ pub fn compare_deep(a: &Value, b: &Value) -> bool {
         }
         (Value::Object(a), Value::Object(b)) => {
             a.len() == b.len()
-                && a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| compare_deep(v, bv)))
+                && a.iter().all(|(k, v)| b.get(k).is_some_and(|bv| compare_deep(v, bv)))
         }
         _ => false,
     }
