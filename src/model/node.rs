@@ -1,5 +1,5 @@
 // src/model/node.rs
-#![allow(dead_code)]
+#![allow(dead_code)] // TODO: Phase 3.2 完整实现后移除
 use std::sync::Arc;
 use crate::model::schema::{Attrs, NodeType};
 use crate::model::mark::Mark;
