@@ -9,7 +9,7 @@
 ## 阶段总览
 
 ```
-Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 → Phase 3.3 → Phase 3.4 → Phase 4.1 → Phase 4.2 → Phase 4.3 → Phase 4.4 → Phase 4.5 → Phase 4.6 → Phase 4.7 → Phase 5
+Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 → Phase 3.3-a → Phase 3.3-b → Phase 3.3-c → Phase 3.4-a → Phase 3.4-b → Phase 3.4-c → Phase 4.1 → Phase 4.2 → Phase 4.3 → Phase 4.4 → Phase 4.5 → Phase 4.6 → Phase 4.7 → Phase 5
 ```
 
 | 阶段 | 名称 | 文件 | 前置依赖 | 状态 |
@@ -19,10 +19,14 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 2.2 | NodeType + MarkType | schema.rs 续（NodeType、MarkType） | Phase 2.1 | ✅ 完成 |
 | Phase 2.3 | Schema::new 两遍构建 | schema.rs 续（Schema::new）+ tests_schema | Phase 2.2 | ✅ 完成 |
 | Phase 3.1 | Mark + MarkType stubs 补全 | mark.rs + tests_mark.rs + schema.rs（MarkType create/remove_from_set/is_in_set） | Phase 2.3 | ✅ 完成 |
-| Phase 3.2 | Fragment + Node 基础 + diff | fragment.rs, node.rs（基础 struct + nodeSize）, diff.rs + tests_diff.rs | Phase 3.1 | ✅ 完成 |
-| Phase 3.3 | Fragment + Node 完整方法 | fragment.rs 续, node.rs 续 + tests_node.rs | Phase 3.2 | ⬜ 待开始 |
-| Phase 3.4 | ContentMatch 完整 + tests_content | content.rs 续（match_fragment, fill_before, find_wrapping）+ tests_content.rs | Phase 3.3 | ⬜ 待开始 |
-| Phase 4.1 | Slice | replace.rs（Slice struct + 所有方法）+ tests_slice.rs | Phase 3.4 | ⬜ 待开始 |
+| Phase 3.2 | Fragment + Node 全部方法 + diff | fragment.rs, node.rs（含所有方法）, diff.rs + tests_diff.rs, schema.rs stubs 补全 | Phase 3.1 | ✅ 完成 |
+| Phase 3.3-a | 测试基础设施 test_builder | src/model/test_builder.rs — doc/p/h1/blockquote/em/strong/img/br 等快捷构建函数 | Phase 3.2 | ⬜ 待开始 |
+| Phase 3.3-b | text_between leaf_text 回调扩展 | fragment.rs + node.rs — leaf_text 参数支持闭包形式 | Phase 3.2 | ⬜ 待开始 |
+| Phase 3.3-c | tests_node.rs | tests_node.rs — 移植 test-node.ts 约 34 个测试（check 相关 4 个推迟到 Phase 3.4-c） | Phase 3.3-a + Phase 3.3-b | ⬜ 待开始 |
+| Phase 3.4-a | match_fragment + valid_content | content.rs（match_fragment）+ schema.rs（NodeType::valid_content）+ 架构决策：fill_before/find_wrapping 增加 schema 参数 | Phase 3.3-c | ⬜ 待开始 |
+| Phase 3.4-b | fill_before + create_and_fill | content.rs（fill_before）+ schema.rs（NodeType::create_and_fill）+ tests_content.rs fill 系列（28 个测试） | Phase 3.4-a | ⬜ 待开始 |
+| Phase 3.4-c | find_wrapping + Node 方法补全 | content.rs（find_wrapping）+ node.rs（check/content_match_at/can_replace/can_replace_with/can_append）+ tests_content.rs matchType 系列 + 4 个 check 测试 | Phase 3.4-b | ⬜ 待开始 |
+| Phase 4.1 | Slice | replace.rs（Slice struct + 所有方法）+ tests_slice.rs | Phase 3.4-c | ⬜ 待开始 |
 | Phase 4.2 | ResolvedPos struct + resolve 算法 | resolved_pos.rs（struct + resolve + resolve_no_cache）+ 基础测试 | Phase 3.4 | ⬜ 待开始 |
 | Phase 4.3 | ResolvedPos 简单访问器 | resolved_pos.rs 续（node/index/start/end/before/after/text_offset/node_after/node_before/pos_at_index） | Phase 4.2 | ⬜ 待开始 |
 | Phase 4.4 | ResolvedPos 复杂方法 + NodeRange | resolved_pos.rs 续（marks/marks_across/block_range/shared_depth/same_parent/max/min）+ NodeRange + tests_resolve.rs | Phase 4.3 | ⬜ 待开始 |
@@ -114,20 +118,125 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 
 ---
 
-## Phase 3：文档类型 + ContentMatch 完整
+## Phase 3.3-a：测试基础设施 test_builder
 
 **文件：**
-- `src/model/mark.rs` — Mark + 所有方法 + `src/model/tests_mark.rs`
-- `src/model/diff.rs` — find_diff_start, find_diff_end
-- `src/model/fragment.rs` — Fragment + 所有方法
-- `src/model/node.rs` — Node + 所有方法 + `src/model/tests_node.rs`
-- `src/model/content.rs`（续）— 补全 match_fragment, fill_before, find_wrapping + `src/model/tests_content.rs`
+- `src/model/test_builder.rs` — 仅 `#[cfg(test)]` 可见的测试工具模块
 
-**产出：** 可创建和操作文档树，所有 ContentMatch 方法完整，tests_content.rs 全部通过。
+**范围：**
+- 函数：`doc()`, `p()`, `h1()`, `h2()`, `blockquote()`, `pre()`, `ul()`, `li()`, `em()`, `strong()`, `code()`, `br()`, `img()`, `hr()` 等（参照 prosemirror-test-builder 的快捷 API）
+- 内部使用简单 SchemaSpec（含 doc/paragraph/heading/blockquote/horizontal_rule/image/hard_break/text 节点，em/strong/link/code mark）
+- 所有函数接收子节点列表，返回 Node
 
-**依赖：** Phase 2.3（需要 Schema 创建测试文档）。
+**产出：** 测试工具模块完整，Phase 3.3-c、3.4-b、3.4-c 可直接复用。
 
-**详细计划：** `docs/superpowers/plans/model-phase3-plan.md`
+**依赖：** Phase 3.2（Node/Fragment/Schema）
+
+---
+
+## Phase 3.3-b：text_between leaf_text 回调扩展
+
+**文件：**
+- `src/model/fragment.rs` — `text_between` 的 `leaf_text` 参数
+- `src/model/node.rs` — `text_between` / `text_content` 的 `leaf_text` 参数
+
+**范围：**
+- 当前 `leaf_text: Option<&str>` 只支持固定字符串，test-node.ts 中有一个测试传入闭包 `(node) => node.textContent`
+- 新增 `LeafText<'_>` 枚举（`Str(&str)` / `Fn(Box<dyn Fn(&Node) -> String>)`），或改为泛型参数
+- 同步更新 fragment.rs 的 `text_between`、node.rs 的 `text_between`/`text_content`
+- 调用方（tests_mark.rs 等现有测试）不受影响（仍传 `None` 或 `Some(str)`）
+
+**产出：** leaf_text 支持回调，所有现有测试仍通过。
+
+**依赖：** Phase 3.2
+
+---
+
+## Phase 3.3-c：tests_node.rs
+
+**文件：**
+- `src/model/tests_node.rs` — 移植 test-node.ts，约 34 个测试
+- `src/model/mod.rs` — 声明 `#[cfg(test)] mod tests_node`
+
+**范围（覆盖 test-node.ts 中不依赖 check/valid_content 的所有测试）：**
+- `toString`（3）：节点/marks 的调试字符串格式
+- `cut`（6）：整块、文本、深层、左右、保留 marks
+- `between`（3）：nodesBetween 迭代文本、多层、行内节点
+- `textBetween`（6）：blockSeparator、leafText 字符串、leafText 回调、空段落、叶节点
+- `textContent`（3）：整文档、文本节点、嵌套元素
+- `from`（5）：Fragment::from_node/from_array/from_fragment/from_null/合并相邻文本
+- `toJSON`（5）：序列化/反序列化 simple/marks/inline-leaf/block-leaf/nested
+- `toString（Fragment）`（3）：toStringInner 格式、toDebugString 回调
+- `leafText`（1）：自定义 textContent
+
+4 个 `check` 测试推迟到 Phase 3.4-c 补写。
+
+**产出：** tests_node.rs 34 个测试全部通过。
+
+**依赖：** Phase 3.3-a（test_builder）、Phase 3.3-b（leaf_text 回调）
+
+---
+
+## Phase 3.4-a：match_fragment + valid_content + 架构决策
+
+**文件：**
+- `src/model/content.rs` — 实现 `match_fragment`
+- `src/model/schema.rs` — 实现 `NodeType::valid_content`
+
+**架构决策（记录为设计决策 28）：**
+`fill_before` 和 `find_wrapping` 需要通过类型名查询 NodeType 属性（`is_leaf`, `has_required_attrs`, `content_match`, `create_and_fill`）。当前 ContentMatch::edges 存储 `(String, Arc<ContentMatch>)`，不持有 NodeType 引用（避免循环 Arc）。
+
+**决定：** `fill_before` 和 `find_wrapping` 签名增加 `schema: &Schema` 参数，在调用时按类型名查 Schema。API 从 TS 的 `fillBefore(after, toEnd)` 变为 `fill_before(schema, after, to_end, start_index)`，与 Decision 6（出边存类型名）保持一致。
+
+**范围：**
+- `ContentMatch::match_fragment(schema: &Schema, frag: &Fragment, start: usize, end: usize) -> Option<Arc<ContentMatch>>` — 约 15 行，逐个子节点调用 `match_type`
+- `NodeType::valid_content(schema: &Schema, frag: &Fragment) -> bool` — 调用 `match_fragment`，替换 `valid_content_stub`
+- `Node::content_match_at(schema: &Schema, index: usize) -> Option<Arc<ContentMatch>>` — 替换 `content_match_at_stub`
+
+**产出：** match_fragment/valid_content/content_match_at 可用，现有测试全部通过。
+
+**依赖：** Phase 3.3-c
+
+---
+
+## Phase 3.4-b：fill_before + create_and_fill + fill 测试
+
+**文件：**
+- `src/model/content.rs` — 实现 `fill_before`
+- `src/model/schema.rs` — 实现 `NodeType::create_and_fill`
+- `src/model/tests_content.rs` — fill_before 系列 28 个测试
+
+**范围：**
+- `NodeType::create_and_fill(schema: &Arc<Schema>, attrs, marks) -> Option<Node>` — 用 `content_match.fill_before(schema, Fragment::empty(), true, 0)` 填充内容，替换 `create_and_fill_stub`
+- `ContentMatch::fill_before(schema: &Schema, after: &Fragment, to_end: bool, start_index: usize) -> Option<Fragment>` — DFS，记忆化已访问 ContentMatch 指针，对每条 edge 调用 `has_required_attrs` 和 `create_and_fill`
+- `tests_content.rs` fill/fill3 辅助函数 + 28 个 fillBefore 测试（完整移植 test-content.ts fillBefore 块）
+
+**产出：** fill_before 和 create_and_fill 实现完毕，28 个 fill 测试全部通过。
+
+**依赖：** Phase 3.4-a
+
+---
+
+## Phase 3.4-c：find_wrapping + Node 方法补全 + 剩余测试
+
+**文件：**
+- `src/model/content.rs` — 实现 `find_wrapping`
+- `src/model/node.rs` — 实现 `check`, `can_replace`, `can_replace_with`, `can_append`
+- `src/model/tests_content.rs` — matchType 系列测试（补全未覆盖部分）
+- `src/model/tests_node.rs` — 补写 4 个 check 测试
+
+**范围：**
+- `ContentMatch::find_wrapping(schema: &Schema, target: &str) -> Option<Vec<String>>` — BFS，wrap_cache（已有 Mutex<HashMap>），跳过 is_leaf/has_required_attrs 的类型
+- `Node::check(schema: &Schema)` — 调用 valid_content + check_attrs + 校验 marks，替换 `check_stub`
+- `Node::can_replace(schema, from, to, replacement, start, end) -> bool`
+- `Node::can_replace_with(schema, from, to, type_name, marks) -> bool`
+- `Node::can_append(schema, other) -> bool`
+- tests_content.rs matchType 系列中未被 content.rs 内联测试覆盖的用例
+- tests_node.rs 补写：invalid_content、marks_in_wrong_places、incorrect_mark_sets、wrong_attribute_types
+
+**产出：** ContentMatch 全部方法完整，Node::check 系列可用，所有 tests_content.rs 和 tests_node.rs 通过。
+
+**依赖：** Phase 3.4-b
 
 ---
 

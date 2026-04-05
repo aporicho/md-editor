@@ -569,6 +569,40 @@ let mut expr_cache: HashMap<String, Arc<ContentMatch>> = HashMap::new();
 
 ---
 
+## Phase 3.4 设计决策
+
+### 决策 28：fill_before / find_wrapping 增加 `schema: &Schema` 参数
+
+TS 的 `ContentMatch.fillBefore(after, toEnd)` 和 `findWrapping(target)` 在运行时直接持有 `NodeType` 对象，可以调用 `type.isText`、`type.hasRequiredAttrs()`、`type.createAndFill()` 等。
+
+Rust 的 ContentMatch::edges 存储 `(String, Arc<ContentMatch>)`（Decision 6），不持有 NodeType 引用，避免循环强引用（Schema→NodeType→ContentMatch→NodeType）。
+
+**处理方式：** `fill_before` 和 `find_wrapping` 签名增加 `schema: &Schema` 参数，在调用时按类型名查询 NodeType：
+
+```rust
+pub fn fill_before(
+    &self,
+    schema: &Schema,
+    after: &Fragment,
+    to_end: bool,
+    start_index: usize,
+) -> Option<Fragment>
+
+pub fn find_wrapping(
+    &self,
+    schema: &Schema,
+    target: &str,
+) -> Option<Vec<String>>
+```
+
+API 从 TS 略有不同，但与 Decision 6（出边存类型名，按需查 Schema）保持一致。`match_fragment` 同样增加 `schema: &Schema` 参数（需要通过 node_type 名查 NodeType 做属性判断）。
+
+### 决策 29：`Fragment::empty()` 用 OnceLock 懒加载全局单例
+
+TS 的 `Fragment.empty` 是静态字段，所有叶节点共享同一空 Fragment 实例。Rust 里 `Fragment::empty()` 用 `OnceLock<Fragment>` 实现全局单例，调用时 clone（只增 Arc refcount，廉价）。与 Mark::NONE（`const &'static [Self]`）语义一致。
+
+---
+
 ## 外部依赖
 
 ```toml
