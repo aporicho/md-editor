@@ -236,7 +236,7 @@ impl Default for MarkSpec {
 pub struct SchemaSpec {
     /// The node types in this schema, in order.
     pub nodes: IndexMap<String, NodeSpec>,
-    /// The mark types in this schema, in order.
+    /// The mark types in this schema. The order determines mark set sorting and parse rule priority.
     pub marks: IndexMap<String, MarkSpec>,
     /// The name of the default top-level node. Defaults to `"doc"`.
     pub top_node: Option<String>,
