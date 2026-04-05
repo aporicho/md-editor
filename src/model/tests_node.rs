@@ -430,3 +430,71 @@ fn to_json_nested() {
     ]);
     round_trip(&d);
 }
+
+// ---- toString (Fragment) tests ----
+
+#[test]
+fn to_string_default_text_node() {
+    let s = test_schema();
+    let n = s.text("hello".to_string(), vec![]);
+    assert_eq!(n.to_string_repr(), "\"hello\"");
+}
+
+#[test]
+fn to_string_default_br() {
+    assert_eq!(br().to_string_repr(), "hard_break");
+}
+
+#[test]
+fn to_string_custom_debug_string() {
+    use indexmap::indexmap;
+    use std::sync::Arc;
+    use crate::model::schema::{NodeSpec, Schema, SchemaSpec};
+    let s = Schema::new(SchemaSpec {
+        nodes: indexmap! {
+            "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+            "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+            "text".to_string() => NodeSpec {
+                inline: true,
+                to_debug_string: Some(Arc::new(|_attrs: &serde_json::Value| "custom_text".to_string())),
+                ..NodeSpec::default()
+            },
+        },
+        marks: indexmap! {},
+        top_node: None,
+    }).unwrap();
+    let n = s.text("hello".to_string(), vec![]);
+    assert_eq!(n.to_string_repr(), "custom_text");
+}
+
+#[test]
+fn to_string_respected_by_fragment() {
+    use indexmap::indexmap;
+    use std::sync::Arc;
+    use crate::model::fragment::Fragment;
+    use crate::model::schema::{NodeSpec, Schema, SchemaSpec};
+    let s = Schema::new(SchemaSpec {
+        nodes: indexmap! {
+            "doc".to_string() => NodeSpec { content: Some("(text|hard_break)*".to_string()), ..NodeSpec::default() },
+            "text".to_string() => NodeSpec {
+                inline: true,
+                to_debug_string: Some(Arc::new(|_attrs: &serde_json::Value| "custom_text".to_string())),
+                ..NodeSpec::default()
+            },
+            "hard_break".to_string() => NodeSpec {
+                inline: true,
+                to_debug_string: Some(Arc::new(|_attrs: &serde_json::Value| "custom_hard_break".to_string())),
+                ..NodeSpec::default()
+            },
+        },
+        marks: indexmap! {},
+        top_node: None,
+    }).unwrap();
+    let hb = s.nodes["hard_break"].create(None, None, vec![]).unwrap();
+    let f = Fragment::from_array(&[
+        s.text("hello".to_string(), vec![]),
+        hb,
+        s.text("world".to_string(), vec![]),
+    ]);
+    assert_eq!(f.to_string_repr(), "<custom_text, custom_hard_break, custom_text>");
+}
