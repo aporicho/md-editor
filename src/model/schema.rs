@@ -883,15 +883,27 @@ impl Schema {
             }
             map
         };
-        // Step 3b: fill NodeType fields using Arc::get_mut (immutable borrow of node_types now released)
+        // Step 3b: fill NodeType fields.
+        //
+        // We cannot use Arc::get_mut here because ContentMatch edges hold Weak<NodeType>
+        // references, and Arc::get_mut returns None when any Weak pointer exists (even if
+        // strong_count == 1). Since we are the sole strong owner and these Weak references
+        // are not actively used during construction, we safely use raw pointer mutation.
+        //
+        // Safety: Arc::strong_count == 1 (only node_types holds these Arcs), so no other
+        // thread or owner can access the NodeType data concurrently at this point.
         let mut linebreak_replacement: Option<Arc<NodeType>> = None;
         for (name, ns) in &spec.nodes {
             let cm = content_matches[name].clone();
-            let nt = Arc::get_mut(node_types.get_mut(name).unwrap()).unwrap();
+            let arc_ref = node_types.get_mut(name).unwrap();
+            debug_assert_eq!(Arc::strong_count(arc_ref), 1, "NodeType '{}' should have strong_count=1 during Schema construction", name);
+            // SAFETY: strong_count == 1 (asserted above); Weak references exist but are not
+            // being upgraded concurrently; mutation is complete before Arc is shared.
+            let nt = unsafe { &mut *(Arc::as_ptr(arc_ref) as *mut NodeType) };
             nt.inline_content = cm.inline_content;
+            let mark_set = resolve_mark_set(ns.marks.as_deref(), &mark_types, nt.inline_content)?;
             nt.content_match = cm;
-            nt.mark_set =
-                resolve_mark_set(ns.marks.as_deref(), &mark_types, nt.inline_content)?;
+            nt.mark_set = mark_set;
             if ns.linebreak_replacement {
                 if linebreak_replacement.is_some() {
                     return Err(SchemaError(

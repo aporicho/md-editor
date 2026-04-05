@@ -772,10 +772,9 @@ impl ContentMatch {
 mod tests {
     use super::*;
 
-    use crate::model::schema::{NodeType, NodeSpec, Whitespace};
-
-    /// 构建一个测试用的假 Arc<NodeType>（无需完整 Schema）
-    fn make_node_type(name: &str, is_inline: bool) -> Arc<NodeType> {
+    /// 创建一个最小化的 NodeType Arc，用于单元测试（不需要完整 Schema）。
+    fn make_minimal_node_type(name: &str, is_inline: bool) -> Arc<crate::model::schema::NodeType> {
+        use crate::model::schema::{NodeType, NodeSpec, Whitespace};
         Arc::new(NodeType {
             name: name.to_string(),
             is_block: !is_inline,
@@ -786,13 +785,13 @@ mod tests {
             mark_set: None,
             whitespace: Whitespace::Normal,
             spec: NodeSpec::default(),
-            default_attrs: Some(Arc::new(Default::default())),
+            default_attrs: None,
         })
     }
 
     fn make_state(
         valid_end: bool,
-        edges_input: Vec<(Arc<NodeType>, Arc<ContentMatch>)>,
+        edges_input: Vec<(Arc<crate::model::schema::NodeType>, Arc<ContentMatch>)>,
     ) -> Arc<ContentMatch> {
         let cm = Arc::new(ContentMatch {
             valid_end,
@@ -807,11 +806,12 @@ mod tests {
     }
 
     // state_a --p--> state_b (valid_end=true)
-    fn two_state_dfa() -> (Arc<ContentMatch>, Arc<NodeType>) {
-        let nt_p = make_node_type("p", false);
+    // 返回 (state_a, p_type)，调用者必须持有 p_type 以防止 Weak 失效。
+    fn two_state_dfa() -> (Arc<ContentMatch>, Arc<crate::model::schema::NodeType>) {
+        let p_type = make_minimal_node_type("p", false);
         let state_b = make_state(true, vec![]);
-        let state_a = make_state(false, vec![(nt_p.clone(), state_b)]);
-        (state_a, nt_p)
+        let state_a = make_state(false, vec![(p_type.clone(), state_b)]);
+        (state_a, p_type)
     }
 
     #[test]
@@ -837,11 +837,12 @@ mod tests {
 
     #[test]
     fn edge_count_and_edge() {
-        let nt_p = make_node_type("p", false);
-        let nt_h1 = make_node_type("h1", false);
+        let p_type = make_minimal_node_type("p", false);
+        let h1_type = make_minimal_node_type("h1", false);
         let state_b = make_state(true, vec![]);
         let state_c = make_state(false, vec![]);
-        let m = make_state(false, vec![(nt_p, state_b), (nt_h1, state_c)]);
+        // 保持 Arc 引用，防止 Weak 失效
+        let m = make_state(false, vec![(p_type.clone(), state_b), (h1_type.clone(), state_c)]);
         assert_eq!(m.edge_count(), 2);
         let (name, _) = m.edge(0).unwrap();
         assert_eq!(name, "p");
@@ -857,60 +858,92 @@ mod tests {
 
     #[test]
     fn compatible_same_type() {
-        let nt_p = make_node_type("p", false);
+        let p_type = make_minimal_node_type("p", false);
         let state_b = make_state(true, vec![]);
-        let m1 = make_state(false, vec![(nt_p.clone(), state_b.clone())]);
-        let m2 = make_state(false, vec![(nt_p.clone(), state_b.clone())]);
+        // 同一个 Arc<NodeType>，Weak::ptr_eq 返回 true
+        let m1 = make_state(false, vec![(p_type.clone(), state_b.clone())]);
+        let m2 = make_state(false, vec![(p_type.clone(), state_b.clone())]);
         assert!(m1.compatible(&m2));
     }
 
     #[test]
     fn compatible_different_types() {
-        let nt_p = make_node_type("p", false);
-        let nt_h1 = make_node_type("h1", false);
+        let p_type = make_minimal_node_type("p", false);
+        let h1_type = make_minimal_node_type("h1", false);
         let sb = make_state(true, vec![]);
         let sc = make_state(true, vec![]);
-        let m1 = make_state(false, vec![(nt_p, sb)]);
-        let m2 = make_state(false, vec![(nt_h1, sc)]);
+        // 保持 Arc 引用，防止 Weak 失效
+        let m1 = make_state(false, vec![(p_type.clone(), sb)]);
+        let m2 = make_state(false, vec![(h1_type.clone(), sc)]);
         assert!(!m1.compatible(&m2));
     }
 
     // ---- helpers for parse tests ----
 
-    fn make_node_types_arc(names: &[(&str, bool)]) -> IndexMap<String, Arc<NodeType>> {
-        names.iter().map(|(n, is_inline)| (n.to_string(), make_node_type(n, *is_inline))).collect()
-    }
-
-    fn make_groups(g: &[(&str, &[&str])]) -> IndexMap<String, Vec<String>> {
-        g.iter()
-            .map(|(group, members)| {
-                (group.to_string(), members.iter().map(|m| m.to_string()).collect())
-            })
-            .collect()
-    }
-
-    fn node_types_basic() -> IndexMap<String, Arc<NodeType>> {
-        make_node_types_arc(&[
-            ("paragraph", false),
-            ("heading", false),
-            ("horizontal_rule", false),
-            ("image", true),
-            ("text", true),
-            ("hard_break", true),
-            ("code_block", false),
-        ])
-    }
-
-    fn groups_basic() -> IndexMap<String, Vec<String>> {
-        make_groups(&[
-            ("block", &["paragraph", "heading", "horizontal_rule", "code_block"]),
-            ("inline", &["image", "text", "hard_break"]),
-        ])
+    /// 为 parse 测试构建最小 Schema（含 paragraph/heading/hr/image/text/hard_break/code_block）。
+    fn parse_schema() -> &'static Arc<crate::model::schema::Schema> {
+        use std::sync::OnceLock;
+        use indexmap::indexmap;
+        use crate::model::schema::{Schema, SchemaSpec, NodeSpec};
+        static SCHEMA: OnceLock<Arc<crate::model::schema::Schema>> = OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            Schema::new(SchemaSpec {
+                nodes: indexmap! {
+                    "doc".to_string() => NodeSpec {
+                        content: Some("block+".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "paragraph".to_string() => NodeSpec {
+                        group: Some("block".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "heading".to_string() => NodeSpec {
+                        group: Some("block".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "horizontal_rule".to_string() => NodeSpec {
+                        group: Some("block".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "image".to_string() => NodeSpec {
+                        inline: true,
+                        group: Some("inline".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "text".to_string() => NodeSpec {
+                        inline: true,
+                        group: Some("inline".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "hard_break".to_string() => NodeSpec {
+                        inline: true,
+                        group: Some("inline".to_string()),
+                        ..NodeSpec::default()
+                    },
+                    "code_block".to_string() => NodeSpec {
+                        group: Some("block".to_string()),
+                        ..NodeSpec::default()
+                    },
+                },
+                marks: indexmap! {},
+                top_node: None,
+            }).expect("parse_schema construction failed")
+        })
     }
 
     fn parse_ok(expr: &str) -> Arc<ContentMatch> {
-        ContentMatch::parse(expr, &node_types_basic(), &groups_basic())
-            .expect("parse should succeed")
+        let s = parse_schema();
+        let groups: IndexMap<String, Vec<String>> = {
+            let mut m: IndexMap<String, Vec<String>> = IndexMap::new();
+            for (name, nt) in &s.nodes {
+                for g in &nt.groups {
+                    m.entry(g.clone()).or_default().push(name.clone());
+                }
+            }
+            m
+        };
+        ContentMatch::parse(expr, &s.nodes, &groups)
+            .expect(&format!("parse should succeed for '{}'", expr))
     }
 
     fn matches(m: &Arc<ContentMatch>, types: &[&str]) -> bool {
@@ -1013,11 +1046,17 @@ mod tests {
 
     #[test]
     fn parse_unknown_type_error() {
-        let res = ContentMatch::parse(
-            "unknown_type",
-            &node_types_basic(),
-            &groups_basic(),
-        );
+        let s = parse_schema();
+        let groups: IndexMap<String, Vec<String>> = {
+            let mut m: IndexMap<String, Vec<String>> = IndexMap::new();
+            for (name, nt) in &s.nodes {
+                for g in &nt.groups {
+                    m.entry(g.clone()).or_default().push(name.clone());
+                }
+            }
+            m
+        };
+        let res = ContentMatch::parse("unknown_type", &s.nodes, &groups);
         assert!(res.is_err());
     }
 
