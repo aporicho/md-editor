@@ -569,6 +569,66 @@ fn check_for_dead_ends(
     Ok(())
 }
 
+/// DFS helper for fill_before: finds what nodes to insert before `after`.
+///
+/// - `match_state`: current ContentMatch state
+/// - `types`: accumulated list of node type names to insert
+/// - `seen`: visited states to avoid cycles (compared by Arc pointer equality)
+fn fill_before_search(
+    match_state: &Arc<ContentMatch>,
+    types: &[String],
+    seen: &mut Vec<Arc<ContentMatch>>,
+    schema: &Arc<crate::model::schema::Schema>,
+    after: &crate::model::fragment::Fragment,
+    to_end: bool,
+    start_index: usize,
+) -> Option<crate::model::fragment::Fragment> {
+    // Try to match after[start_index..] from current state
+    if let Some(finished) = match_state.match_fragment(after, start_index, after.child_count()) {
+        // When to_end=false: condition is always true (just need match to succeed)
+        // When to_end=true: also need to reach a valid end state
+        if !to_end || finished.valid_end {
+            let nodes: Option<Vec<crate::model::node::Node>> = types
+                .iter()
+                .map(|type_name| {
+                    let nt = schema.nodes.get(type_name)?;
+                    nt.create_and_fill(schema, None, vec![])
+                })
+                .collect();
+            if let Some(nodes) = nodes {
+                return Some(crate::model::fragment::Fragment::from_array(&nodes));
+            }
+        }
+    }
+
+    // Explore outgoing edges to find what to prepend
+    let edges = match_state.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
+    for (type_name, next_state) in edges {
+        if let Some(nt) = schema.nodes.get(type_name) {
+            if !nt.is_text
+                && !nt.has_required_attrs()
+                && !seen.iter().any(|s| Arc::ptr_eq(s, next_state))
+            {
+                seen.push(next_state.clone());
+                let mut new_types = types.to_vec();
+                new_types.push(type_name.clone());
+                if let Some(found) = fill_before_search(
+                    next_state,
+                    &new_types,
+                    seen,
+                    schema,
+                    after,
+                    to_end,
+                    start_index,
+                ) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Represents a match state of a node type's content expression.
 ///
 /// Instances of this class represent a match state of a node type's
@@ -714,7 +774,8 @@ impl ContentMatch {
         to_end: bool,
         start_index: usize,
     ) -> Option<crate::model::fragment::Fragment> {
-        todo!("fill_before: implement in Phase 3.4-b")
+        let mut seen: Vec<Arc<ContentMatch>> = vec![self.clone()];
+        fill_before_search(self, &[], &mut seen, schema, after, to_end, start_index)
     }
 
     /// Find a set of wrapping node type names that would allow a node of the given type
