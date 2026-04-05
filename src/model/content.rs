@@ -230,6 +230,178 @@ fn parse_expr_atom(
     }
 }
 
+#[derive(Debug, Clone)]
+struct NfaEdge {
+    /// None = ε-edge (epsilon/null transition)
+    term: Option<String>,
+    /// Target state index. usize::MAX means "dangling" (not yet connected).
+    to: usize,
+}
+
+fn nfa_new_state(nfa: &mut Vec<Vec<NfaEdge>>) -> usize {
+    nfa.push(vec![]);
+    nfa.len() - 1
+}
+
+fn nfa_connect(nfa: &mut Vec<Vec<NfaEdge>>, dangling: &[(usize, usize)], to: usize) {
+    for &(state, edge_idx) in dangling {
+        nfa[state][edge_idx].to = to;
+    }
+}
+
+/// Compile expr from `from` state.
+/// Returns list of (state, edge_index) for "dangling" edges (their `to` = usize::MAX).
+fn nfa_compile(
+    expr: &Expr,
+    from: usize,
+    nfa: &mut Vec<Vec<NfaEdge>>,
+) -> Vec<(usize, usize)> {
+    match expr {
+        Expr::Choice(exprs) => {
+            exprs
+                .iter()
+                .flat_map(|e| nfa_compile(e, from, nfa))
+                .collect()
+        }
+        Expr::Seq(exprs) => {
+            let mut cur = from;
+            for (i, e) in exprs.iter().enumerate() {
+                let dangling = nfa_compile(e, cur, nfa);
+                if i == exprs.len() - 1 {
+                    return dangling;
+                }
+                let next = nfa_new_state(nfa);
+                nfa_connect(nfa, &dangling, next);
+                cur = next;
+            }
+            // Seq with 0 exprs shouldn't happen (parser guarantees >= 1)
+            vec![]
+        }
+        Expr::Star(inner) => {
+            let loop_state = nfa_new_state(nfa);
+            // ε from `from` to loop_state
+            nfa[from].push(NfaEdge { term: None, to: loop_state });
+            let dangling_inner = nfa_compile(inner, loop_state, nfa);
+            nfa_connect(nfa, &dangling_inner, loop_state);
+            // Exit ε-edge from loop_state
+            let exit_idx = nfa[loop_state].len();
+            nfa[loop_state].push(NfaEdge { term: None, to: usize::MAX });
+            vec![(loop_state, exit_idx)]
+        }
+        Expr::Plus(inner) => {
+            let loop_state = nfa_new_state(nfa);
+            let first = nfa_compile(inner, from, nfa);
+            nfa_connect(nfa, &first, loop_state);
+            let second = nfa_compile(inner, loop_state, nfa);
+            nfa_connect(nfa, &second, loop_state);
+            // Exit ε-edge from loop_state
+            let exit_idx = nfa[loop_state].len();
+            nfa[loop_state].push(NfaEdge { term: None, to: usize::MAX });
+            vec![(loop_state, exit_idx)]
+        }
+        Expr::Opt(inner) => {
+            // ε-skip edge from `from`
+            let skip_idx = nfa[from].len();
+            nfa[from].push(NfaEdge { term: None, to: usize::MAX });
+            let mut dangling = vec![(from, skip_idx)];
+            dangling.extend(nfa_compile(inner, from, nfa));
+            dangling
+        }
+        Expr::Range { min, max, expr: inner } => {
+            let mut cur = from;
+            // Mandatory `min` repetitions
+            for _ in 0..*min {
+                let next = nfa_new_state(nfa);
+                let d = nfa_compile(inner, cur, nfa);
+                nfa_connect(nfa, &d, next);
+                cur = next;
+            }
+            match max {
+                None => {
+                    // Open range {n,}: loop back after min
+                    let d = nfa_compile(inner, cur, nfa);
+                    nfa_connect(nfa, &d, cur);
+                    let exit_idx = nfa[cur].len();
+                    nfa[cur].push(NfaEdge { term: None, to: usize::MAX });
+                    vec![(cur, exit_idx)]
+                }
+                Some(m) => {
+                    let mut dangling: Vec<(usize, usize)> = vec![];
+                    for _ in *min..*m {
+                        let next = nfa_new_state(nfa);
+                        let skip_idx = nfa[cur].len();
+                        nfa[cur].push(NfaEdge { term: None, to: usize::MAX });
+                        dangling.push((cur, skip_idx));
+                        let d = nfa_compile(inner, cur, nfa);
+                        nfa_connect(nfa, &d, next);
+                        cur = next;
+                    }
+                    let exit_idx = nfa[cur].len();
+                    nfa[cur].push(NfaEdge { term: None, to: usize::MAX });
+                    dangling.push((cur, exit_idx));
+                    dangling
+                }
+            }
+        }
+        Expr::Name { type_name, .. } => {
+            let edge_idx = nfa[from].len();
+            nfa[from].push(NfaEdge {
+                term: Some(type_name.clone()),
+                to: usize::MAX,
+            });
+            vec![(from, edge_idx)]
+        }
+    }
+}
+
+/// Build an NFA from a parsed Expr.
+///
+/// Construct an NFA from an expression as returned by the parser. The
+/// NFA is represented as an array of states, which are themselves
+/// arrays of edges, which are `{term, to}` objects. The first state is
+/// the entry state and the last node is the success state.
+///
+/// Note that unlike typical NFAs, the edge ordering in this one is
+/// significant, in that it is used to construct filler content when necessary.
+fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
+    let mut nfa: Vec<Vec<NfaEdge>> = vec![vec![]]; // state 0 = entry
+    let success = nfa_new_state(&mut nfa);
+    let dangling = nfa_compile(expr, 0, &mut nfa);
+    nfa_connect(&mut nfa, &dangling, success);
+    nfa
+}
+
+fn null_from_scan(nfa: &[Vec<NfaEdge>], node: usize, result: &mut Vec<usize>) {
+    let edges = &nfa[node];
+    // Collapse single-ε chains (TS omits these to avoid needless duplicates)
+    if edges.len() == 1 && edges[0].term.is_none() {
+        null_from_scan(nfa, edges[0].to, result);
+        return;
+    }
+    if result.contains(&node) {
+        return;
+    }
+    result.push(node);
+    for e in edges {
+        if e.term.is_none() && e.to != usize::MAX && !result.contains(&e.to) {
+            null_from_scan(nfa, e.to, result);
+        }
+    }
+}
+
+/// Returns the set of NFA states reachable from `state` via ε-edges only,
+/// sorted in descending order.
+///
+/// Get the set of nodes reachable by null edges from `node`. Omit
+/// nodes with only a single null-out-edge, since they may lead to
+/// needless duplicated nodes.
+fn null_from(nfa: &[Vec<NfaEdge>], state: usize) -> Vec<usize> {
+    let mut result: Vec<usize> = vec![];
+    null_from_scan(nfa, state, &mut result);
+    result.sort_by(|a, b| b.cmp(a)); // descending
+    result
+}
+
 /// Represents a match state of a node type's content expression.
 ///
 /// Instances of this class represent a match state of a node type's
