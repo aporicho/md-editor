@@ -530,6 +530,8 @@ fn check_for_dead_ends(
     start: &Arc<ContentMatch>,
     expr_str: &str,
 ) -> Result<(), SyntaxError> {
+    // 前提：此函数仅在 Schema::new 内部调用，此时所有 Arc<NodeType> 均存活。
+    // Weak::upgrade() 在此场景下必然成功；若将来作为公共 API 暴露，需重新审视升级失败的处理。
     let mut work: Vec<Arc<ContentMatch>> = vec![start.clone()];
     let mut i = 0;
     while i < work.len() {
