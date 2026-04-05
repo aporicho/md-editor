@@ -4,7 +4,6 @@
 //! Phase 4.3+ 将在本文件续写访问器方法(node/start/end/before/after/marks...)。
 #![allow(dead_code)] // TODO: Phase 4.4 访问器完整后移除
 
-#[allow(unused_imports)] // TODO: Task 2 resolve_no_cache 将使用
 use crate::model::errors::RangeError;
 use crate::model::node::Node;
 
@@ -60,5 +59,39 @@ impl ResolvedPos {
             }
             Some(v) => v as usize,
         }
+    }
+
+    /// Resolve a position in a document tree without consulting any cache.
+    ///
+    /// Returns `Err(RangeError)` if `pos` is outside the document range
+    /// `[0, doc.content.size]`.
+    pub fn resolve_no_cache(doc: &Node, pos: usize) -> Result<ResolvedPos, RangeError> {
+        if pos > doc.content.size {
+            return Err(RangeError(format!("Position {} out of range", pos)));
+        }
+        let mut path: Vec<PathFrame> = Vec::new();
+        let mut start = 0usize;
+        let mut parent_offset = pos;
+        let mut node: Node = doc.clone();
+        loop {
+            let (index, offset) = node.content.find_index(parent_offset)?;
+            let rem = parent_offset - offset;
+            path.push(PathFrame {
+                node: node.clone(),
+                index,
+                start_pos: start + offset,
+            });
+            if rem == 0 {
+                break;
+            }
+            let child: Node = node.content.child(index)?.clone();
+            if child.is_text() {
+                break;
+            }
+            node = child;
+            parent_offset = rem - 1;
+            start += offset + 1;
+        }
+        Ok(ResolvedPos::new(pos, path, parent_offset))
     }
 }
