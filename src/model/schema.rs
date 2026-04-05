@@ -264,6 +264,46 @@ pub struct SchemaSpec {
     pub top_node: Option<String>,
 }
 
+/// Merge provided attribute values with spec defaults.
+///
+/// For node types where all attrs have a default value (or which don't
+/// have any attributes), build up a single reusable default attribute
+/// object, and use it for all nodes that don't specify specific attributes.
+///
+/// Corresponds to `computeAttrs` in TypeScript.
+pub(crate) fn compute_attrs(
+    specs: &IndexMap<String, AttrSpec>,
+    values: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Result<Attrs, crate::model::errors::SchemaError> {
+    use std::collections::HashMap;
+    let mut built: HashMap<String, serde_json::Value> = HashMap::new();
+    for (name, spec) in specs {
+        let given = values.and_then(|v| v.get(name));
+        let value = if let Some(v) = given {
+            v.clone()
+        } else if let Some(d) = &spec.default {
+            d.clone()
+        } else {
+            return Err(crate::model::errors::SchemaError(format!(
+                "No value supplied for attribute {}",
+                name
+            )));
+        };
+        built.insert(name.clone(), value);
+    }
+    Ok(Arc::new(built))
+}
+
+/// Pre-compute a reusable default Attrs map.
+///
+/// Returns `None` if any attribute has no default (i.e. is required).
+/// Returns `Some(attrs)` with all defaults filled in otherwise.
+///
+/// Corresponds to `defaultAttrs` in TypeScript.
+pub(crate) fn default_attrs(specs: &IndexMap<String, AttrSpec>) -> Option<Attrs> {
+    compute_attrs(specs, None).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +443,56 @@ mod tests {
             .build();
         assert_eq!(spec.default, Some(json!(42)));
         assert!(spec.validate.is_none());
+    }
+
+    // ---- compute_attrs / default_attrs ----
+    use std::collections::HashMap as StdHashMap;
+
+    #[test]
+    fn compute_attrs_uses_spec_defaults() {
+        let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        specs.insert("level".to_string(), AttrSpec { default: Some(json!(1)), validate: None });
+        let result = compute_attrs(&specs, None).unwrap();
+        assert_eq!(result.get("level"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn compute_attrs_provided_values_override_defaults() {
+        let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        specs.insert("level".to_string(), AttrSpec { default: Some(json!(1)), validate: None });
+        let mut vals: StdHashMap<String, serde_json::Value> = StdHashMap::new();
+        vals.insert("level".to_string(), json!(3));
+        let result = compute_attrs(&specs, Some(&vals)).unwrap();
+        assert_eq!(result.get("level"), Some(&json!(3)));
+    }
+
+    #[test]
+    fn compute_attrs_errors_on_missing_required() {
+        let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        specs.insert("href".to_string(), AttrSpec { default: None, validate: None });
+        let err = compute_attrs(&specs, None).unwrap_err();
+        assert!(err.0.contains("href"));
+    }
+
+    #[test]
+    fn compute_attrs_empty_specs_returns_empty_map() {
+        let specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        let result = compute_attrs(&specs, None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn default_attrs_some_when_all_have_defaults() {
+        let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        specs.insert("level".to_string(), AttrSpec { default: Some(json!(1)), validate: None });
+        assert!(default_attrs(&specs).is_some());
+    }
+
+    #[test]
+    fn default_attrs_none_when_any_required() {
+        let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
+        specs.insert("href".to_string(), AttrSpec { default: None, validate: None });
+        assert!(default_attrs(&specs).is_none());
     }
 }
 
