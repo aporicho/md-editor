@@ -1717,7 +1717,10 @@ name = "md-editor"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "indexmap",
  "open",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
