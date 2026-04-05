@@ -8,6 +8,7 @@
 //   - fill_before(&self, after: &Fragment, to_end: bool, start_index: usize) -> Option<Fragment>
 //   - find_wrapping(&self, target_type_name: &str) -> Option<Vec<String>>
 //
+#![allow(dead_code)] // TODO: Phase 3 完成后移除
 #[allow(unused_imports)]
 use std::sync::Arc;
 #[allow(unused_imports)]
@@ -105,7 +106,7 @@ fn parse_expr_seq(
     groups: &IndexMap<String, Vec<String>>,
 ) -> Result<Expr, SyntaxError> {
     let mut exprs = vec![parse_expr_subscript(stream, groups)?];
-    while stream.next().map_or(false, |t| t != ")" && t != "|") {
+    while stream.next().is_some_and(|t| t != ")" && t != "|") {
         exprs.push(parse_expr_subscript(stream, groups)?);
     }
     Ok(if exprs.len() == 1 { exprs.remove(0) } else { Expr::Seq(exprs) })
@@ -243,7 +244,7 @@ fn nfa_new_state(nfa: &mut Vec<Vec<NfaEdge>>) -> usize {
     nfa.len() - 1
 }
 
-fn nfa_connect(nfa: &mut Vec<Vec<NfaEdge>>, dangling: &[(usize, usize)], to: usize) {
+fn nfa_connect(nfa: &mut [Vec<NfaEdge>], dangling: &[(usize, usize)], to: usize) {
     for &(state, edge_idx) in dangling {
         nfa[state][edge_idx].to = to;
     }
@@ -648,6 +649,33 @@ impl ContentMatch {
             .get()
             .and_then(|edges| edges.iter().find(|(name, _)| name != "text"))
             .map(|(name, _)| name.clone())
+    }
+
+    // ---- Phase 3 stubs (依赖 Fragment，届时补全) ----
+
+    /// Try to match a fragment. Returns the resulting match state when successful.
+    ///
+    /// NOTE: stub — requires Fragment (Phase 3). Will be implemented in Phase 3.
+    #[allow(unused)]
+    pub fn match_fragment_stub(&self) -> ! {
+        todo!("match_fragment requires Fragment — implement in Phase 3")
+    }
+
+    /// Fill in missing content to make `after` fit after the current match state.
+    ///
+    /// NOTE: stub — requires Fragment (Phase 3). Will be implemented in Phase 3.
+    #[allow(unused)]
+    pub fn fill_before_stub(&self) -> ! {
+        todo!("fill_before requires Fragment — implement in Phase 3")
+    }
+
+    /// Find a set of wrapping node type names that would allow a node of the given type
+    /// to appear at this position.
+    ///
+    /// NOTE: stub — requires NodeType.create_and_fill (Phase 3). Will be implemented in Phase 3.
+    #[allow(unused)]
+    pub fn find_wrapping_stub(&self) -> ! {
+        todo!("find_wrapping requires NodeType.create_and_fill — implement in Phase 3")
     }
 }
 

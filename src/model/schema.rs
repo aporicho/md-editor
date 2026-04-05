@@ -1,3 +1,5 @@
+#![allow(dead_code)] // TODO: Phase 2 完成后移除
+
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -9,7 +11,6 @@ use crate::model::render_output::RenderOutput;
 /// An object mapping attribute names to values.
 ///
 /// Corresponds to `Attrs = {readonly [attr: string]: any}` in TypeScript.
-#[allow(dead_code)]
 pub type Attrs = Arc<HashMap<String, Value>>;
 
 /// Rendering hook type for a node: given a node's attrs, returns a RenderOutput.
@@ -25,7 +26,6 @@ pub type AttrValidatorFn = Box<dyn Fn(&Value) -> Result<(), String> + Send + Syn
 
 /// Whitespace handling mode for a node type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Whitespace {
     /// Collapse whitespace in normal mode (default).
     Normal,
@@ -37,7 +37,6 @@ pub enum Whitespace {
 ///
 /// Replaces `excluded: MarkType[]` from TypeScript to avoid Arc circular references.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub enum ExcludeSpec {
     /// Only excludes marks of the same type (default behavior).
     SelfOnly,
@@ -49,7 +48,6 @@ pub enum ExcludeSpec {
 
 impl ExcludeSpec {
     /// Returns true if a mark with `self_name` excludes a mark with `other_name`.
-    #[allow(dead_code)]
     pub fn excludes(&self, self_name: &str, other_name: &str) -> bool {
         match self {
             ExcludeSpec::SelfOnly => self_name == other_name,
@@ -60,7 +58,6 @@ impl ExcludeSpec {
 }
 
 /// Validates attribute values. Used in AttrSpec.
-#[allow(dead_code)]
 pub enum AttrValidator {
     /// A `|`-separated list of allowed JSON primitive type names
     /// (e.g. `"string|null"`). Validated against the JSON value's type name.
@@ -82,7 +79,6 @@ impl fmt::Debug for AttrValidator {
 ///
 /// Corresponds to `AttributeSpec` in TypeScript.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct AttrSpec {
     /// The default value for this attribute. `None` means the attribute is required.
     pub default: Option<Value>,
@@ -92,13 +88,11 @@ pub struct AttrSpec {
 
 impl AttrSpec {
     /// Returns true if this attribute must be explicitly provided (no default).
-    #[allow(dead_code)]
     pub fn is_required(&self) -> bool {
         self.default.is_none()
     }
 
     /// Validates a value against this spec. Returns `Err` if validation fails.
-    #[allow(dead_code)]
     pub fn validate_value(&self, value: &Value) -> Result<(), String> {
         match &self.validate {
             None => Ok(()),
@@ -127,7 +121,6 @@ impl AttrSpec {
 /// Corresponds to `NodeSpec` interface in TypeScript.
 /// DOM-related fields (toDOM, parseDOM) are replaced by rendering hooks
 /// for the cosmic-text layer. See design doc for rationale.
-#[allow(dead_code)]
 pub struct NodeSpec {
     /// The content expression for this node (e.g. `"block+"`, `"inline*"`).
     pub content: Option<String>,
@@ -196,7 +189,6 @@ impl Default for NodeSpec {
 /// A description of a mark type, used when defining a schema.
 ///
 /// Corresponds to `MarkSpec` interface in TypeScript.
-#[allow(dead_code)]
 pub struct MarkSpec {
     /// Attribute specs for this mark type.
     pub attrs: IndexMap<String, AttrSpec>,
@@ -232,7 +224,6 @@ impl Default for MarkSpec {
 /// An object describing a schema, as passed to the Schema constructor.
 ///
 /// Corresponds to `SchemaSpec` interface in TypeScript.
-#[allow(dead_code)]
 pub struct SchemaSpec {
     /// The node types in this schema, in order.
     pub nodes: IndexMap<String, NodeSpec>,
