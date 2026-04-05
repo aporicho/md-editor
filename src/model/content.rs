@@ -701,12 +701,20 @@ impl ContentMatch {
         Some(cur)
     }
 
-    /// Fill in missing content to make `after` fit after the current match state.
+    /// Try to match the given fragment, and if that fails, see if it can
+    /// be made to match by inserting nodes in front of it.
     ///
-    /// NOTE: stub — requires Fragment (Phase 3). Will be implemented in Phase 3.
-    #[allow(unused)]
-    pub fn fill_before_stub(&self) -> ! {
-        todo!("fill_before requires Fragment — implement in Phase 3")
+    /// Returns a fragment of inserted nodes (may be empty if nothing needs
+    /// to be inserted). When `to_end` is true, only returns a fragment if
+    /// the resulting match goes to the end of the content expression.
+    pub fn fill_before(
+        self: &Arc<Self>,
+        schema: &Arc<crate::model::schema::Schema>,
+        after: &crate::model::fragment::Fragment,
+        to_end: bool,
+        start_index: usize,
+    ) -> Option<crate::model::fragment::Fragment> {
+        todo!("fill_before: implement in Phase 3.4-b")
     }
 
     /// Find a set of wrapping node type names that would allow a node of the given type

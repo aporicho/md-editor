@@ -488,10 +488,14 @@ impl NodeType {
 
     /// Like `create`, but fill in missing content automatically.
     ///
-    /// NOTE: stub — requires match_fragment (Phase 3.4).
-    #[allow(unused)]
-    pub fn create_and_fill_stub(&self) -> ! {
-        todo!("NodeType::create_and_fill requires match_fragment — implement in Phase 3.4")
+    /// If no fitting content can be constructed, returns `None`.
+    pub fn create_and_fill(
+        self: &Arc<Self>,
+        schema: &Arc<Schema>,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+        marks: Vec<crate::model::mark::Mark>,
+    ) -> Option<crate::model::node::Node> {
+        todo!("create_and_fill: implement in Phase 3.4-b")
     }
 
     /// Returns true if the given fragment is valid content for this node type.
