@@ -13,6 +13,7 @@ pub mod fragment;
 pub mod node;
 pub mod diff;
 pub mod replace;
+pub mod resolved_pos;
 #[cfg(test)]
 mod tests_diff;
 #[cfg(test)]
@@ -23,3 +24,5 @@ mod tests_node;
 mod tests_content;
 #[cfg(test)]
 mod tests_slice;
+#[cfg(test)]
+mod tests_resolve;
