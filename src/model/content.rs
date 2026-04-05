@@ -365,8 +365,10 @@ fn nfa_compile(
 /// significant, in that it is used to construct filler content when necessary.
 fn build_nfa(expr: &Expr) -> Vec<Vec<NfaEdge>> {
     let mut nfa: Vec<Vec<NfaEdge>> = vec![vec![]]; // state 0 = entry
-    let success = nfa_new_state(&mut nfa);
+    // Compile first so intermediate states get their indices before the success state.
     let dangling = nfa_compile(expr, 0, &mut nfa);
+    // Create success state last: it will be at index nfa.len() - 1 after push.
+    let success = nfa_new_state(&mut nfa);
     nfa_connect(&mut nfa, &dangling, success);
     nfa
 }
@@ -402,6 +404,137 @@ fn null_from(nfa: &[Vec<NfaEdge>], state: usize) -> Vec<usize> {
     result
 }
 
+/// Compiles an NFA into a DFA represented as ContentMatch states.
+///
+/// Compiles an NFA as produced by `build_nfa` into a DFA, modeled as a set
+/// of state objects (ContentMatch instances) with transitions between them.
+fn build_dfa(
+    nfa: &[Vec<NfaEdge>],
+    node_types: &IndexMap<String, bool>,
+) -> Arc<ContentMatch> {
+    let mut labeled: std::collections::HashMap<String, Arc<ContentMatch>> =
+        std::collections::HashMap::new();
+    let accept_state = nfa.len() - 1;
+    build_dfa_explore(&null_from(nfa, 0), nfa, accept_state, node_types, &mut labeled)
+}
+
+fn build_dfa_explore(
+    states: &[usize],
+    nfa: &[Vec<NfaEdge>],
+    accept_state: usize,
+    node_types: &IndexMap<String, bool>,
+    labeled: &mut std::collections::HashMap<String, Arc<ContentMatch>>,
+) -> Arc<ContentMatch> {
+    // Collect outgoing edges grouped by term
+    let mut out: Vec<(String, Vec<usize>)> = vec![];
+    for &node in states {
+        for edge in &nfa[node] {
+            if let Some(term) = &edge.term {
+                let set_idx = if let Some(pos) = out.iter().position(|(t, _)| t == term) {
+                    pos
+                } else {
+                    out.push((term.clone(), vec![]));
+                    out.len() - 1
+                };
+                for ns in null_from(nfa, edge.to) {
+                    if !out[set_idx].1.contains(&ns) {
+                        out[set_idx].1.push(ns);
+                    }
+                }
+            }
+        }
+    }
+
+    let valid_end = states.contains(&accept_state);
+    let inline_content = out
+        .first()
+        .and_then(|(t, _)| node_types.get(t).copied())
+        .unwrap_or(false);
+
+    let state_key = {
+        let mut sorted = states.to_vec();
+        sorted.sort_by(|a, b| b.cmp(a));
+        sorted.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",")
+    };
+
+    // Register a placeholder before recursing to handle cycles.
+    // edges is a RefCell, so we can back-patch it even after the Arc has been cloned.
+    labeled.insert(
+        state_key.clone(),
+        Arc::new(ContentMatch {
+            valid_end,
+            inline_content,
+            edges: std::cell::RefCell::new(vec![]),
+            wrap_cache: std::cell::RefCell::new(vec![]),
+        }),
+    );
+
+    // Build edges (recurse into children)
+    let mut edges: Vec<(String, Arc<ContentMatch>)> = vec![];
+    for (term, mut target_states) in out {
+        target_states.sort_by(|a, b| b.cmp(a));
+        let child_key = target_states
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let next = if let Some(existing) = labeled.get(&child_key) {
+            existing.clone()
+        } else {
+            build_dfa_explore(&target_states, nfa, accept_state, node_types, labeled)
+        };
+        edges.push((term, next));
+    }
+
+    // Back-patch edges via RefCell: works regardless of Arc refcount
+    *labeled[&state_key].edges.borrow_mut() = edges;
+
+    labeled[&state_key].clone()
+}
+
+/// Check that every non-valid-end state has at least one generatable outgoing type.
+///
+/// A generatable type is one that is not "text" and has no required attrs.
+fn check_for_dead_ends(
+    start: &Arc<ContentMatch>,
+    expr_str: &str,
+    has_required: &IndexMap<String, bool>,
+) -> Result<(), SyntaxError> {
+    let mut work: Vec<Arc<ContentMatch>> = vec![start.clone()];
+    let mut i = 0;
+    while i < work.len() {
+        let state = work[i].clone();
+        i += 1;
+        let mut dead = !state.valid_end;
+        let mut node_names: Vec<String> = vec![];
+        let state_edges: Vec<(String, Arc<ContentMatch>)> = state
+            .edges
+            .borrow()
+            .iter()
+            .map(|(n, s)| (n.clone(), s.clone()))
+            .collect();
+        for (name, next) in &state_edges {
+            node_names.push(name.clone());
+            let is_text = name == "text";
+            let required = has_required.get(name).copied().unwrap_or(false);
+            if !(is_text || required) {
+                dead = false;
+            }
+            if !work.iter().any(|w| Arc::ptr_eq(w, next)) {
+                work.push(next.clone());
+            }
+        }
+        if dead && !node_names.is_empty() {
+            return Err(SyntaxError(format!(
+                "Only non-generatable nodes ({}) in a required position (in content expression '{}')",
+                node_names.join(", "),
+                expr_str
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Represents a match state of a node type's content expression.
 ///
 /// Instances of this class represent a match state of a node type's
@@ -414,8 +547,9 @@ pub struct ContentMatch {
     /// True when this match position expects inline content.
     /// Computed at parse time from the first edge's node type's is_inline flag.
     pub inline_content: bool,
-    /// Outgoing edges: (type_name, next_state).
-    edges: Vec<(String, Arc<ContentMatch>)>,
+    /// Outgoing edges: (type_name, next_state). Wrapped in RefCell so the DFA
+    /// builder can back-patch edges after registering the Arc (avoids cyclic refcount issues).
+    edges: std::cell::RefCell<Vec<(String, Arc<ContentMatch>)>>,
     /// Cache for find_wrapping results.
     wrap_cache: std::cell::RefCell<Vec<WrapCacheEntry>>,
 }
@@ -432,7 +566,7 @@ impl ContentMatch {
         Arc::new(ContentMatch {
             valid_end: true,
             inline_content: false,
-            edges: vec![],
+            edges: std::cell::RefCell::new(vec![]),
             wrap_cache: std::cell::RefCell::new(vec![]),
         })
     }
@@ -440,27 +574,29 @@ impl ContentMatch {
     /// Match a node type by name, returning the next match state if successful.
     ///
     /// Match a node type, returning a match after that node if successful.
-    pub fn match_type(&self, type_name: &str) -> Option<&Arc<ContentMatch>> {
+    pub fn match_type(&self, type_name: &str) -> Option<Arc<ContentMatch>> {
         self.edges
+            .borrow()
             .iter()
             .find(|(name, _)| name == type_name)
-            .map(|(_, next)| next)
+            .map(|(_, next)| next.clone())
     }
 
     /// The number of outgoing edges this node has in the finite automaton
     /// that describes the content expression.
     pub fn edge_count(&self) -> usize {
-        self.edges.len()
+        self.edges.borrow().len()
     }
 
     /// Get the nth outgoing edge from this node in the finite automaton
     /// that describes the content expression.
     ///
     /// Returns `(type_name, next_state)`, or `Err(RangeError)` if n is out of range.
-    pub fn edge(&self, n: usize) -> Result<(&str, &Arc<ContentMatch>), RangeError> {
+    pub fn edge(&self, n: usize) -> Result<(String, Arc<ContentMatch>), RangeError> {
         self.edges
+            .borrow()
             .get(n)
-            .map(|(name, next)| (name.as_str(), next))
+            .map(|(name, next)| (name.clone(), next.clone()))
             .ok_or_else(|| RangeError(format!("There's no {}th edge in this content match", n)))
     }
 
@@ -468,14 +604,54 @@ impl ContentMatch {
     ///
     /// Indicates whether this node allows some of the same content as the given match.
     pub fn compatible(&self, other: &ContentMatch) -> bool {
-        for (name, _) in &self.edges {
-            for (other_name, _) in &other.edges {
+        let edges = self.edges.borrow();
+        let other_edges = other.edges.borrow();
+        for (name, _) in edges.iter() {
+            for (other_name, _) in other_edges.iter() {
                 if name == other_name {
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// Parse a content expression string into a DFA.
+    ///
+    /// `node_types`: map from type name to `is_inline` flag.
+    /// `groups`: map from group name to list of type names in that group.
+    /// `has_required_attrs`: map from type name to whether it has required attrs (no default).
+    pub fn parse(
+        expr: &str,
+        node_types: &IndexMap<String, bool>,
+        groups: &IndexMap<String, Vec<String>>,
+        has_required_attrs: &IndexMap<String, bool>,
+    ) -> Result<Arc<ContentMatch>, SyntaxError> {
+        if expr.trim().is_empty() {
+            return Ok(ContentMatch::empty());
+        }
+        let mut stream = TokenStream::new(expr, node_types);
+        let ast = parse_expr(&mut stream, groups)?;
+        if stream.next().is_some() {
+            return Err(stream.err("Unexpected trailing text"));
+        }
+        let nfa = build_nfa(&ast);
+        let dfa = build_dfa(&nfa, node_types);
+        check_for_dead_ends(&dfa, expr, has_required_attrs)?;
+        Ok(dfa)
+    }
+
+    /// Get the name of the first outgoing node type at this match position that can be generated.
+    ///
+    /// Get the first matching node type at this match position that can
+    /// be generated. A type is generatable if it is not "text".
+    /// Returns the type name, or None if no generatable type exists.
+    pub fn default_type(&self) -> Option<String> {
+        self.edges
+            .borrow()
+            .iter()
+            .find(|(name, _)| name != "text")
+            .map(|(name, _)| name.clone())
     }
 }
 
@@ -487,7 +663,9 @@ mod tests {
         Arc::new(ContentMatch {
             valid_end,
             inline_content: false,
-            edges: edges.into_iter().map(|(n, s)| (n.to_string(), s)).collect(),
+            edges: std::cell::RefCell::new(
+                edges.into_iter().map(|(n, s)| (n.to_string(), s)).collect()
+            ),
             wrap_cache: std::cell::RefCell::new(vec![]),
         })
     }
@@ -552,5 +730,209 @@ mod tests {
         let m1 = make_state(false, vec![("p", sb)]);
         let m2 = make_state(false, vec![("h1", sc)]);
         assert!(!m1.compatible(&m2));
+    }
+
+    // ---- helpers for parse tests ----
+
+    fn make_node_types(names: &[(&str, bool)]) -> IndexMap<String, bool> {
+        names.iter().map(|(n, b)| (n.to_string(), *b)).collect()
+    }
+
+    fn make_groups(g: &[(&str, &[&str])]) -> IndexMap<String, Vec<String>> {
+        g.iter()
+            .map(|(group, members)| {
+                (group.to_string(), members.iter().map(|m| m.to_string()).collect())
+            })
+            .collect()
+    }
+
+    fn make_required(names: &[&str]) -> IndexMap<String, bool> {
+        names.iter().map(|n| (n.to_string(), false)).collect()
+    }
+
+    fn node_types_basic() -> IndexMap<String, bool> {
+        make_node_types(&[
+            ("paragraph", false),
+            ("heading", false),
+            ("horizontal_rule", false),
+            ("image", true),
+            ("text", true),
+            ("hard_break", true),
+            ("code_block", false),
+        ])
+    }
+
+    fn groups_basic() -> IndexMap<String, Vec<String>> {
+        make_groups(&[
+            ("block", &["paragraph", "heading", "horizontal_rule", "code_block"]),
+            ("inline", &["image", "text", "hard_break"]),
+        ])
+    }
+
+    fn required_basic() -> IndexMap<String, bool> {
+        make_required(&["paragraph", "heading", "horizontal_rule", "image", "text", "hard_break", "code_block"])
+    }
+
+    fn parse_ok(expr: &str) -> Arc<ContentMatch> {
+        ContentMatch::parse(expr, &node_types_basic(), &groups_basic(), &required_basic())
+            .expect("parse should succeed")
+    }
+
+    fn matches(m: &Arc<ContentMatch>, types: &[&str]) -> bool {
+        let mut cur: Option<Arc<ContentMatch>> = Some(m.clone());
+        for &t in types {
+            cur = cur.and_then(|state| state.match_type(t));
+        }
+        cur.map_or(false, |s| s.valid_end)
+    }
+
+    #[test]
+    fn parse_empty_expr() {
+        let m = parse_ok("");
+        assert!(m.valid_end);
+        assert_eq!(m.edge_count(), 0);
+        assert!(m.match_type("paragraph").is_none());
+    }
+
+    #[test]
+    fn parse_star() {
+        let m = parse_ok("image*");
+        assert!(matches(&m, &[]));
+        assert!(matches(&m, &["image"]));
+        assert!(matches(&m, &["image", "image", "image", "image"]));
+        assert!(!matches(&m, &["image", "text"]));
+    }
+
+    #[test]
+    fn parse_plus() {
+        let m = parse_ok("paragraph+");
+        assert!(!matches(&m, &[]));
+        assert!(matches(&m, &["paragraph"]));
+        assert!(matches(&m, &["paragraph", "paragraph"]));
+    }
+
+    #[test]
+    fn parse_opt() {
+        let m = parse_ok("image?");
+        assert!(matches(&m, &[]));
+        assert!(matches(&m, &["image"]));
+        assert!(!matches(&m, &["image", "image"]));
+    }
+
+    #[test]
+    fn parse_seq() {
+        let m = parse_ok("paragraph horizontal_rule paragraph");
+        assert!(matches(&m, &["paragraph", "horizontal_rule", "paragraph"]));
+        assert!(!matches(&m, &["paragraph", "horizontal_rule"]));
+        assert!(!matches(&m, &["horizontal_rule", "paragraph", "horizontal_rule"]));
+    }
+
+    #[test]
+    fn parse_choice() {
+        let m = parse_ok("(paragraph | heading)");
+        assert!(matches(&m, &["paragraph"]));
+        assert!(matches(&m, &["heading"]));
+        assert!(!matches(&m, &["image"]));
+    }
+
+    #[test]
+    fn parse_group() {
+        let m = parse_ok("inline*");
+        assert!(matches(&m, &["image", "text"]));
+        assert!(!matches(&m, &["paragraph"]));
+    }
+
+    #[test]
+    fn parse_count_exact() {
+        let m = parse_ok("hard_break{2}");
+        assert!(!matches(&m, &["hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break"]));
+        assert!(!matches(&m, &["hard_break", "hard_break", "hard_break"]));
+    }
+
+    #[test]
+    fn parse_count_range() {
+        let m = parse_ok("hard_break{2, 4}");
+        assert!(!matches(&m, &["hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break", "hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break", "hard_break", "hard_break"]));
+        assert!(!matches(&m, &["hard_break", "hard_break", "hard_break", "hard_break", "hard_break"]));
+    }
+
+    #[test]
+    fn parse_open_range() {
+        let m = parse_ok("hard_break{2,}");
+        assert!(!matches(&m, &["hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break"]));
+        assert!(matches(&m, &["hard_break", "hard_break", "hard_break", "hard_break"]));
+    }
+
+    #[test]
+    fn parse_nested_plus() {
+        let m = parse_ok("(heading paragraph+)+");
+        assert!(matches(&m, &["heading", "paragraph"]));
+        assert!(matches(&m, &["heading", "paragraph", "heading", "paragraph", "paragraph"]));
+        assert!(!matches(&m, &["heading", "paragraph", "heading", "paragraph", "paragraph", "horizontal_rule"]));
+    }
+
+    #[test]
+    fn parse_unknown_type_error() {
+        let res = ContentMatch::parse(
+            "unknown_type",
+            &node_types_basic(),
+            &groups_basic(),
+            &required_basic(),
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn inline_content_flag_true() {
+        let m = parse_ok("image*");
+        assert!(m.inline_content, "image is inline, so inline_content should be true");
+    }
+
+    #[test]
+    fn inline_content_flag_false() {
+        let m = parse_ok("paragraph*");
+        assert!(!m.inline_content, "paragraph is block, so inline_content should be false");
+    }
+
+    #[test]
+    fn inline_content_empty() {
+        let m = parse_ok("");
+        assert!(!m.inline_content);
+    }
+
+    #[test]
+    fn default_type_returns_first_generatable() {
+        let m = parse_ok("paragraph+");
+        assert_eq!(m.default_type().as_deref(), Some("paragraph"));
+    }
+
+    #[test]
+    fn default_type_empty_has_none() {
+        assert_eq!(ContentMatch::empty().default_type(), None);
+    }
+
+    #[test]
+    fn sequence_star_zero_and_many() {
+        // "heading paragraph*" — heading required, paragraphs optional
+        let m = parse_ok("heading paragraph*");
+        assert!(matches(&m, &["heading"]));
+        assert!(matches(&m, &["heading", "paragraph", "paragraph"]));
+        assert!(!matches(&m, &[]));
+        assert!(!matches(&m, &["paragraph"]));
+    }
+
+    #[test]
+    fn sequence_plus_required() {
+        // "heading paragraph+" — both required
+        let m = parse_ok("heading paragraph+");
+        assert!(!matches(&m, &["heading"]));
+        assert!(matches(&m, &["heading", "paragraph"]));
+        assert!(matches(&m, &["heading", "paragraph", "paragraph"]));
+        assert!(!matches(&m, &["paragraph", "paragraph"]));
     }
 }
