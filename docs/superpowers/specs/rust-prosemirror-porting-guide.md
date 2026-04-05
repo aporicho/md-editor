@@ -110,14 +110,22 @@ ProseMirror 每个公开类的每个公开方法和属性，都必须在 Rust �
 
 **参考源码位置：** `reference/prosemirror-*/src/`
 
+**三个阶段目标：**
+
+- **第一阶段（最小可用编辑器）：** model + transform + state + view，完成后编辑器可运行
+- **第二阶段（完整功能）：** history + commands + keymap + markdown，完成后具备完整编辑体验
+- **第三阶段（协同编辑）：** collab，完成后支持多人实时协作
+
 **模块实现顺序：**
 1. `src/model/` — 文档数据模型（当前）
 2. `src/transform/` — 编辑操作
 3. `src/state/` — 编辑器状态与插件
-4. `src/history/` — 撤销/重做
-5. `src/commands/` — 编辑命令
-6. `src/keymap/` — 快捷键
-7. `src/markdown/` — Markdown 解析/序列化
+4. `src/view/` — 渲染与用户交互（基于 Iced + cosmic-text，替代 prosemirror-view）
+5. `src/history/` — 撤销/重做
+6. `src/commands/` — 编辑命令
+7. `src/keymap/` — 快捷键
+8. `src/markdown/` — Markdown 解析/序列化
+9. `src/collab/` — 协同编辑（基于 prosemirror-collab）
 
 ---
 
