@@ -826,6 +826,84 @@ mod tests {
         };
         assert!(p.has_required_attrs());
     }
+
+    #[test]
+    fn nodetype_allows_mark_type_none_means_all() {
+        let p = make_paragraph_nodetype();
+        let mt = Arc::new(MarkType {
+            name: "em".to_string(),
+            rank: 0,
+            inclusive: true,
+            excluded: ExcludeSpec::SelfOnly,
+            spec: MarkSpec::default(),
+            default_attrs: None,
+        });
+        // mark_set = None → all marks allowed
+        assert!(p.allows_mark_type(&mt));
+    }
+
+    #[test]
+    fn nodetype_allows_mark_type_restricted_set() {
+        let mt_em = Arc::new(MarkType {
+            name: "em".to_string(),
+            rank: 0,
+            inclusive: true,
+            excluded: ExcludeSpec::SelfOnly,
+            spec: MarkSpec::default(),
+            default_attrs: None,
+        });
+        let mt_strong = Arc::new(MarkType {
+            name: "strong".to_string(),
+            rank: 1,
+            inclusive: true,
+            excluded: ExcludeSpec::SelfOnly,
+            spec: MarkSpec::default(),
+            default_attrs: None,
+        });
+        // mark_set = Some([em]) → only em allowed
+        let p = NodeType {
+            mark_set: Some(vec![mt_em.clone()]),
+            ..make_paragraph_nodetype()
+        };
+        assert!(p.allows_mark_type(&mt_em));
+        assert!(!p.allows_mark_type(&mt_strong));
+    }
+
+    #[test]
+    fn nodetype_compatible_content_same_node() {
+        let p = make_paragraph_nodetype();
+        assert!(p.compatible_content(&p));
+    }
+
+    #[test]
+    fn nodetype_compute_attrs_for_empty_spec() {
+        let p = make_paragraph_nodetype(); // spec.attrs is empty
+        let result = p.compute_attrs_for(None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn nodetype_compute_attrs_for_returns_defaults() {
+        use indexmap::indexmap;
+        use std::collections::HashMap as StdHashMap;
+        let p = NodeType {
+            spec: NodeSpec {
+                attrs: indexmap! {
+                    "level".to_string() => AttrSpec { default: Some(json!(1)), validate: None }
+                },
+                ..NodeSpec::default()
+            },
+            default_attrs: None,
+            ..make_paragraph_nodetype()
+        };
+        let result = p.compute_attrs_for(None).unwrap();
+        assert_eq!(result.get("level"), Some(&json!(1)));
+        // override
+        let mut vals: StdHashMap<String, serde_json::Value> = StdHashMap::new();
+        vals.insert("level".to_string(), json!(3));
+        let result2 = p.compute_attrs_for(Some(&vals)).unwrap();
+        assert_eq!(result2.get("level"), Some(&json!(3)));
+    }
 }
 
 // Suppress unused import warning for fmt (only used in removed manual Debug impl)
