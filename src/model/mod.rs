@@ -9,3 +9,8 @@ pub mod content;
 pub mod mark;
 #[cfg(test)]
 mod tests_mark;
+pub mod fragment;
+pub mod node;
+pub mod diff;
+#[cfg(test)]
+mod tests_diff;
