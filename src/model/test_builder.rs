@@ -62,6 +62,11 @@ pub fn test_schema() -> &'static Arc<Schema> {
                     group: Some("block".to_string()),
                     ..NodeSpec::default()
                 },
+                "code_block".to_string() => NodeSpec {
+                    content: Some("text*".to_string()),
+                    group: Some("block".to_string()),
+                    ..NodeSpec::default()
+                },
                 "image".to_string() => NodeSpec {
                     inline: true,
                     group: Some("inline".to_string()),
@@ -215,6 +220,11 @@ pub fn br() -> Node {
 /// 创建 horizontal_rule 节点（block leaf）。
 pub fn hr() -> Node {
     make_leaf("horizontal_rule", empty_attrs())
+}
+
+/// 创建 code_block 节点（对应 TS test-builder 的 pre()）。
+pub fn pre(children: &[Node]) -> Node {
+    make_node("code_block", empty_attrs(), children)
 }
 
 /// 创建 image 节点（src/alt/title 全用默认值 ""）。
