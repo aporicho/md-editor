@@ -320,3 +320,113 @@ fn text_content_nested() {
     ])]);
     assert_eq!(d.text_content(), "hiab");
 }
+
+// ---- from tests ----
+
+#[test]
+fn from_wraps_single_node() {
+    let para = p(&[]);
+    let f = crate::model::fragment::Fragment::from_node(para);
+    let wrapped = doc(&[]).copy(Some(f));
+    let expected = doc(&[p(&[])]);
+    assert!(wrapped.eq(&expected));
+}
+
+#[test]
+fn from_wraps_array() {
+    let br_node = br();
+    let text_node = t("foo");
+    let f = crate::model::fragment::Fragment::from_array(&[br_node, text_node]);
+    let wrapped = p(&[]).copy(Some(f));
+    let expected = p(&[br(), t("foo")]);
+    assert!(wrapped.eq(&expected));
+}
+
+#[test]
+fn from_preserves_fragment() {
+    let d = doc(&[p(&[t("foo")])]);
+    let f = d.content.clone();
+    let wrapped = doc(&[]).copy(Some(f));
+    let expected = doc(&[p(&[t("foo")])]);
+    assert!(wrapped.eq(&expected));
+}
+
+#[test]
+fn from_accepts_empty() {
+    let f = crate::model::fragment::Fragment::empty();
+    let wrapped = p(&[]).copy(Some(f));
+    let expected = p(&[]);
+    assert!(wrapped.eq(&expected));
+}
+
+#[test]
+fn from_joins_adjacent_text() {
+    let a = t("a");
+    let b = t("b");
+    let f = crate::model::fragment::Fragment::from_array(&[a, b]);
+    let wrapped = p(&[]).copy(Some(f));
+    let expected = p(&[t("ab")]);
+    assert!(wrapped.eq(&expected));
+}
+
+// ---- toJSON tests ----
+
+fn round_trip(d: &Node) {
+    let s = test_schema();
+    let json = d.to_json();
+    let restored = s.node_from_json(&json).unwrap();
+    assert!(
+        restored.eq(d),
+        "roundtrip failed:\n  original: {}\n  restored: {}",
+        d.to_string_repr(),
+        restored.to_string_repr()
+    );
+}
+
+#[test]
+fn to_json_simple_node() {
+    round_trip(&doc(&[p(&[t("foo")])]));
+}
+
+#[test]
+fn to_json_marks() {
+    let bar_em = em(&[t("bar")]);
+    let baz_em_strong: Vec<Node> = em(&strong(&[t("baz")]));
+    let x_link = link("http://x.com", &[t("x")]);
+    let mut children: Vec<Node> = vec![t("foo")];
+    children.extend(bar_em);
+    children.extend(baz_em_strong);
+    children.push(t(" "));
+    children.extend(x_link);
+    round_trip(&doc(&[p(&children)]));
+}
+
+#[test]
+fn to_json_inline_leaf() {
+    let img_em = em(&[img()]);
+    let mut children: Vec<Node> = vec![t("foo")];
+    children.extend(img_em);
+    children.push(t("bar"));
+    round_trip(&doc(&[p(&children)]));
+}
+
+#[test]
+fn to_json_block_leaf() {
+    round_trip(&doc(&[p(&[t("a")]), hr(), p(&[t("b")]), p(&[])]));
+}
+
+#[test]
+fn to_json_nested() {
+    let img_em = em(&[img()]);
+    let d = doc(&[
+        blockquote(&[
+            ul(&[
+                li(&[p(&[t("a")]), p(&[t("b")])]),
+                li(&[p(&img_em)]),
+            ]),
+            p(&[t("c")]),
+        ]),
+        p(&[t("d")]),
+    ]);
+    round_trip(&d);
+}
