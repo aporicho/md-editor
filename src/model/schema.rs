@@ -1192,10 +1192,22 @@ mod tests {
     use crate::model::content::ContentMatch;
 
     fn make_paragraph_nodetype() -> NodeType {
-        let nt_map: IndexMap<String, bool> = [("text".to_string(), true)].into_iter().collect();
+        let text_arc = Arc::new(NodeType {
+            name: "text".to_string(),
+            is_block: false,
+            is_text: true,
+            inline_content: false,
+            groups: vec![],
+            content_match: ContentMatch::empty(),
+            mark_set: None,
+            whitespace: Whitespace::Normal,
+            spec: NodeSpec::default(),
+            default_attrs: None,
+        });
+        let nt_map: IndexMap<String, Arc<NodeType>> =
+            [("text".to_string(), text_arc)].into_iter().collect();
         let g: IndexMap<String, Vec<String>> = IndexMap::new();
-        let r: IndexMap<String, bool> = IndexMap::new();
-        let cm = ContentMatch::parse("text*", &nt_map, &g, &r).unwrap();
+        let cm = ContentMatch::parse("text*", &nt_map, &g).unwrap();
         NodeType {
             name: "paragraph".to_string(),
             is_block: true,
