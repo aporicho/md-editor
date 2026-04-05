@@ -501,7 +501,7 @@ impl NodeType {
         let attrs = self.compute_attrs_for(attrs).ok()?;
         // Start with empty content
         let content = crate::model::fragment::Fragment::empty();
-        // match_fragment(empty, 0, 0) always returns Some(content_match) — no iterations
+        // match_fragment(empty, 0, 0) 迭代 0 次，返回初始 match state 本身（content_match 起始状态）
         let matched = self.content_match.match_fragment(&content, 0, 0)?;
         // Fill to reach a valid end from matched state
         let after = matched.fill_before(
