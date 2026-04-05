@@ -545,18 +545,27 @@ impl MarkType {
     /// When there is a mark of this type in the given set, a new set
     /// without it is returned. Otherwise, the input set is returned.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn remove_from_set_stub(&self) -> ! {
-        todo!("MarkType::remove_from_set requires Mark — implement in Phase 3")
+    /// When there is a mark of this type in the given set, a new set
+    /// without it is returned. Otherwise, the input set is returned.
+    pub fn remove_from_set(
+        &self,
+        set: &[crate::model::mark::Mark],
+    ) -> Vec<crate::model::mark::Mark> {
+        set.iter()
+            .filter(|m| !std::ptr::eq(m.mark_type.as_ref(), self))
+            .cloned()
+            .collect()
     }
 
     /// Tests whether there is a mark of this type in the given set.
     ///
-    /// NOTE: stub — requires Mark (Phase 3).
-    #[allow(unused)]
-    pub fn is_in_set_stub(&self) -> ! {
-        todo!("MarkType::is_in_set requires Mark — implement in Phase 3")
+    /// Tests whether there is a mark of this type in the given set.
+    pub fn is_in_set<'a>(
+        &self,
+        set: &'a [crate::model::mark::Mark],
+    ) -> Option<&'a crate::model::mark::Mark> {
+        set.iter()
+            .find(|m| std::ptr::eq(m.mark_type.as_ref(), self))
     }
 }
 
