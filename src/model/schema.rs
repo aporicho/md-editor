@@ -304,6 +304,198 @@ pub(crate) fn default_attrs(specs: &IndexMap<String, AttrSpec>) -> Option<Attrs>
     compute_attrs(specs, None).ok()
 }
 
+/// Like nodes, marks (which are associated with nodes to signify
+/// things like emphasis or being part of a link) are
+/// tagged with type objects, which are instantiated once per `Schema`.
+///
+/// Corresponds to `MarkType` in TypeScript.
+/// Note: `schema` back-reference removed (design decision 5 — avoids circular Arc).
+#[derive(Clone)]
+pub struct MarkType {
+    /// The name of the mark type.
+    pub name: String,
+    /// @internal rank determines mark set ordering.
+    pub rank: usize,
+    /// Whether this mark should be active when the cursor is positioned at its end.
+    pub inclusive: bool,
+    /// The exclude relationship for this mark type.
+    /// Filled in by `Schema::new`; defaults to `ExcludeSpec::SelfOnly`.
+    pub excluded: ExcludeSpec,
+    /// The spec on which the type is based.
+    pub spec: MarkSpec,
+    /// Pre-computed default attributes (None if any attribute is required).
+    pub(crate) default_attrs: Option<Attrs>,
+}
+
+/// Node types are objects allocated once per `Schema` and used to
+/// tag `Node` instances. They contain information about the node type,
+/// such as its name and what kind of node it represents.
+///
+/// Corresponds to `NodeType` in TypeScript.
+/// Note: `schema` back-reference removed (design decision 5 — avoids circular Arc).
+#[derive(Clone)]
+pub struct NodeType {
+    /// The name the node type has in this schema.
+    pub name: String,
+    /// True if this is a block-level node (`!(spec.inline || name == "text")`).
+    pub is_block: bool,
+    /// True if this is the text node type.
+    pub is_text: bool,
+    /// True if this node type has inline content.
+    /// Set during Schema construction from `content_match.inline_content`.
+    pub inline_content: bool,
+    /// The groups this node type belongs to (derived from `spec.group`).
+    pub groups: Vec<String>,
+    /// The starting match state of the node type's content expression.
+    /// Initialised to `ContentMatch::empty()`; filled in by `Schema::new`.
+    pub content_match: Arc<crate::model::content::ContentMatch>,
+    /// The set of marks allowed in this node. `None` means all marks are allowed.
+    /// Filled in by `Schema::new`.
+    pub mark_set: Option<Vec<Arc<MarkType>>>,
+    /// The node type's whitespace handling mode.
+    pub whitespace: Whitespace,
+    /// The spec that this type is based on.
+    pub spec: NodeSpec,
+    /// Pre-computed default attributes (None if any attribute is required).
+    pub(crate) default_attrs: Option<Attrs>,
+}
+
+impl NodeType {
+    /// True if this is an inline type.
+    ///
+    /// True if this is an inline type.
+    pub fn is_inline(&self) -> bool {
+        !self.is_block
+    }
+
+    /// True if this is a textblock type, a block that contains inline content.
+    ///
+    /// True if this is a textblock type, a block that contains inline
+    /// content.
+    pub fn is_textblock(&self) -> bool {
+        self.is_block && self.inline_content
+    }
+
+    /// True for node types that allow no content.
+    ///
+    /// True for node types that allow no content.
+    pub fn is_leaf(&self) -> bool {
+        self.content_match.edge_count() == 0 && self.content_match.valid_end
+    }
+
+    /// True when this node is an atom, i.e. when it does not have
+    /// directly editable content.
+    pub fn is_atom(&self) -> bool {
+        self.is_leaf() || self.spec.atom
+    }
+
+    /// Return true when this node type is part of the given group.
+    ///
+    /// Return true when this node type is part of the given
+    /// [group](#model.NodeSpec.group).
+    pub fn is_in_group(&self, group: &str) -> bool {
+        self.groups.iter().any(|g| g == group)
+    }
+
+    /// The node type's whitespace option.
+    ///
+    /// The node type's [whitespace](#model.NodeSpec.whitespace) option.
+    pub fn whitespace(&self) -> Whitespace {
+        self.spec.whitespace.unwrap_or(if self.spec.code {
+            Whitespace::Pre
+        } else {
+            Whitespace::Normal
+        })
+    }
+
+    /// Tells you whether this node type has any required attributes.
+    ///
+    /// Tells you whether this node type has any required attributes.
+    pub fn has_required_attrs(&self) -> bool {
+        self.spec.attrs.values().any(|a| a.is_required())
+    }
+
+    /// Indicates whether this node allows some of the same content as
+    /// the given node type.
+    pub fn compatible_content(&self, other: &NodeType) -> bool {
+        std::ptr::eq(self, other) || self.content_match.compatible(&other.content_match)
+    }
+
+    /// Compute attributes, merging provided values with spec defaults.
+    ///
+    /// @internal
+    pub(crate) fn compute_attrs_for(
+        &self,
+        attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<Attrs, crate::model::errors::SchemaError> {
+        if attrs.is_none() {
+            if let Some(defaults) = &self.default_attrs {
+                return Ok(defaults.clone());
+            }
+        }
+        compute_attrs(&self.spec.attrs, attrs)
+    }
+
+    /// Check whether the given mark type is allowed in this node.
+    ///
+    /// Check whether the given mark type is allowed in this node.
+    pub fn allows_mark_type(&self, mark_type: &Arc<MarkType>) -> bool {
+        self.mark_set
+            .as_ref()
+            .map_or(true, |set| set.iter().any(|m| Arc::ptr_eq(m, mark_type)))
+    }
+
+    // ---- Phase 3 stubs (依赖 Fragment / Node / Mark) ----
+
+    /// Create a `Node` of this type.
+    ///
+    /// NOTE: stub — requires Node/Fragment/Mark (Phase 3).
+    #[allow(unused)]
+    pub fn create_stub(&self) -> ! {
+        todo!("NodeType::create requires Node/Fragment/Mark — implement in Phase 3")
+    }
+
+    /// Like `create`, but check the given content against the node type's content restrictions.
+    ///
+    /// NOTE: stub — requires Fragment (Phase 3).
+    #[allow(unused)]
+    pub fn create_checked_stub(&self) -> ! {
+        todo!("NodeType::create_checked requires Fragment — implement in Phase 3")
+    }
+
+    /// Like `create`, but fill in missing content automatically.
+    ///
+    /// NOTE: stub — requires Fragment (Phase 3).
+    #[allow(unused)]
+    pub fn create_and_fill_stub(&self) -> ! {
+        todo!("NodeType::create_and_fill requires Fragment — implement in Phase 3")
+    }
+
+    /// Returns true if the given fragment is valid content for this node type.
+    ///
+    /// NOTE: stub — requires Fragment (Phase 3).
+    #[allow(unused)]
+    pub fn valid_content_stub(&self) -> ! {
+        todo!("NodeType::valid_content requires Fragment — implement in Phase 3")
+    }
+
+    /// Test whether the given set of marks are allowed in this node.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn allows_marks_stub(&self) -> ! {
+        todo!("NodeType::allows_marks requires Mark — implement in Phase 3")
+    }
+
+    /// Removes the marks that are not allowed in this node from the given set.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn allowed_marks_stub(&self) -> ! {
+        todo!("NodeType::allowed_marks requires Mark — implement in Phase 3")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +685,146 @@ mod tests {
         let mut specs: IndexMap<String, AttrSpec> = IndexMap::new();
         specs.insert("href".to_string(), AttrSpec { default: None, validate: None });
         assert!(default_attrs(&specs).is_none());
+    }
+
+    // ---- NodeType 谓词测试 ----
+    use crate::model::content::ContentMatch;
+
+    fn make_paragraph_nodetype() -> NodeType {
+        let nt_map: IndexMap<String, bool> = [("text".to_string(), true)].into_iter().collect();
+        let g: IndexMap<String, Vec<String>> = IndexMap::new();
+        let r: IndexMap<String, bool> = IndexMap::new();
+        let cm = ContentMatch::parse("text*", &nt_map, &g, &r).unwrap();
+        NodeType {
+            name: "paragraph".to_string(),
+            is_block: true,
+            is_text: false,
+            inline_content: cm.inline_content,
+            groups: vec!["block".to_string()],
+            content_match: cm,
+            mark_set: None,
+            whitespace: Whitespace::Normal,
+            spec: NodeSpec::default(),
+            default_attrs: None,
+        }
+    }
+
+    fn make_text_nodetype() -> NodeType {
+        NodeType {
+            name: "text".to_string(),
+            is_block: false,
+            is_text: true,
+            inline_content: false,
+            groups: vec![],
+            content_match: ContentMatch::empty(),
+            mark_set: None,
+            whitespace: Whitespace::Normal,
+            spec: NodeSpec::default(),
+            default_attrs: None,
+        }
+    }
+
+    fn make_image_nodetype() -> NodeType {
+        NodeType {
+            name: "image".to_string(),
+            is_block: false,
+            is_text: false,
+            inline_content: false,
+            groups: vec!["inline".to_string()],
+            content_match: ContentMatch::empty(),
+            mark_set: None,
+            whitespace: Whitespace::Normal,
+            spec: NodeSpec { atom: true, ..NodeSpec::default() },
+            default_attrs: None,
+        }
+    }
+
+    #[test]
+    fn nodetype_paragraph_is_block_not_inline() {
+        let p = make_paragraph_nodetype();
+        assert!(p.is_block);
+        assert!(!p.is_text);
+        assert!(!p.is_inline());
+    }
+
+    #[test]
+    fn nodetype_text_is_inline_and_text() {
+        let t = make_text_nodetype();
+        assert!(t.is_text);
+        assert!(t.is_inline());
+        assert!(!t.is_block);
+    }
+
+    #[test]
+    fn nodetype_paragraph_is_textblock() {
+        let p = make_paragraph_nodetype();
+        assert!(p.is_textblock());
+    }
+
+    #[test]
+    fn nodetype_image_is_leaf_and_atom() {
+        let img = make_image_nodetype();
+        assert!(img.is_leaf());
+        assert!(img.is_atom());
+    }
+
+    #[test]
+    fn nodetype_paragraph_is_not_leaf() {
+        let p = make_paragraph_nodetype();
+        assert!(!p.is_leaf());
+        assert!(!p.is_atom());
+    }
+
+    #[test]
+    fn nodetype_is_in_group() {
+        let p = make_paragraph_nodetype();
+        assert!(p.is_in_group("block"));
+        assert!(!p.is_in_group("inline"));
+    }
+
+    #[test]
+    fn nodetype_whitespace_normal_by_default() {
+        let p = make_paragraph_nodetype();
+        assert_eq!(p.whitespace(), Whitespace::Normal);
+    }
+
+    #[test]
+    fn nodetype_whitespace_pre_when_code_true() {
+        let code_node = NodeType {
+            spec: NodeSpec { code: true, ..NodeSpec::default() },
+            ..make_paragraph_nodetype()
+        };
+        assert_eq!(code_node.whitespace(), Whitespace::Pre);
+    }
+
+    #[test]
+    fn nodetype_whitespace_spec_override() {
+        let pre_node = NodeType {
+            spec: NodeSpec { whitespace: Some(Whitespace::Pre), ..NodeSpec::default() },
+            ..make_paragraph_nodetype()
+        };
+        assert_eq!(pre_node.whitespace(), Whitespace::Pre);
+    }
+
+    #[test]
+    fn nodetype_has_required_attrs_false_when_empty() {
+        let p = make_paragraph_nodetype();
+        assert!(!p.has_required_attrs());
+    }
+
+    #[test]
+    fn nodetype_has_required_attrs_true_when_any_required() {
+        use indexmap::indexmap;
+        let p = NodeType {
+            spec: NodeSpec {
+                attrs: indexmap! {
+                    "href".to_string() => AttrSpec { default: None, validate: None }
+                },
+                ..NodeSpec::default()
+            },
+            ..make_paragraph_nodetype()
+        };
+        assert!(p.has_required_attrs());
     }
 }
 
