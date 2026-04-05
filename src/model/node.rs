@@ -110,6 +110,9 @@ impl Node {
 
     /// Concatenates all the text nodes found in this fragment and its children.
     pub fn text_content(&self) -> String {
+        if self.is_text() {
+            return self.text.clone().unwrap_or_default();
+        }
         if self.node_type.is_leaf()
             && let Some(ref lf) = self.node_type.spec.leaf_text
         {
