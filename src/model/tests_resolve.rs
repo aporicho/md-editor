@@ -522,3 +522,90 @@ fn node_before_cuts_text_when_inside_text_node() {
     assert!(before.is_text());
     assert_eq!(before.text.as_deref(), Some("c"));
 }
+
+// --- Task 4: integration test ---
+//
+// 对照 TS test-resolve.ts 的 "should reflect the document structure" 测试。
+// 循环 pos 0..=12 验证所有访问器的一致性。
+
+#[test]
+fn resolve_integration_all_accessors_consistent() {
+    let d = test_doc();
+    // 定义每个 pos 的期望 depth
+    let expected_depth: [usize; 13] = [0, 1, 1, 1, 0, 1, 2, 2, 2, 2, 2, 1, 0];
+    let expected_parent_offset: [usize; 13] = [0, 0, 1, 2, 4, 0, 0, 1, 2, 3, 4, 6, 12];
+
+    for pos in 0..=12 {
+        let rp = ResolvedPos::resolve(&d, pos).unwrap();
+        assert_eq!(rp.depth, expected_depth[pos], "pos={} depth", pos);
+        assert_eq!(rp.parent_offset, expected_parent_offset[pos], "pos={} parent_offset", pos);
+
+        // doc() 始终返回 doc 节点
+        assert_eq!(rp.doc().node_type.name, "doc", "pos={} doc", pos);
+
+        // start(0) 始终为 0, end(0) 始终为 doc.content.size = 12
+        assert_eq!(rp.start(Some(0)), 0, "pos={} start(0)", pos);
+        assert_eq!(rp.end(Some(0)), 12, "pos={} end(0)", pos);
+
+        // before(0)/after(0) 始终报错
+        assert!(rp.before(Some(0)).is_err(), "pos={} before(0)", pos);
+        assert!(rp.after(Some(0)).is_err(), "pos={} after(0)", pos);
+
+        // 对每个层级验证 node/start/end/before/after 的一致性
+        for i in 0..=rp.depth {
+            let node = rp.node(Some(i as i32));
+            let start = rp.start(Some(i as i32));
+            let end = rp.end(Some(i as i32));
+            // end == start + content.size(self-consistent invariant)
+            assert_eq!(end, start + node.content.size, "pos={} level={} end-start", pos, i);
+
+            if i > 0 {
+                // before(i) 指向 node 的开始 tag 之前,即 start-1
+                assert_eq!(rp.before(Some(i as i32)).unwrap(), start - 1, "pos={} level={} before", pos, i);
+                // after(i) 指向 node 的结束 tag 之后,即 end+1
+                assert_eq!(rp.after(Some(i as i32)).unwrap(), end + 1, "pos={} level={} after", pos, i);
+            }
+        }
+
+        // parent_offset 不变式:parent_offset == pos - start(self.depth)
+        // (parent_offset 即 pos 相对于最深 node content 起始的偏移)
+        let depth_start = rp.start(Some(rp.depth as i32));
+        assert_eq!(rp.parent_offset, pos - depth_start, "pos={} parent_offset invariant", pos);
+
+        // text_offset 不变式:text_offset == pos - path[self.depth].start_pos
+        // 注意:text_offset 不一定等于 parent_offset —— 当 path[depth].index > 0
+        // (pos 落在某个 child 之后的边界)时,text_offset < parent_offset。
+        // 只在 path[depth].index==0 或 pos 精确落在 text 内部时两者相等。
+        if rp.index(None) == 0 {
+            assert_eq!(rp.text_offset(), rp.parent_offset, "pos={} text_offset at index 0", pos);
+        }
+    }
+}
+
+#[test]
+fn resolve_integration_node_before_after_at_text_boundaries() {
+    let d = test_doc();
+
+    // pos=7:text "cdef" 内部字符 1(c 之后, d 之前)
+    // node_before = text("c"), node_after = text("def")
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp.node_before().unwrap().text.as_deref(), Some("c"));
+    assert_eq!(rp.node_after().unwrap().text.as_deref(), Some("def"));
+
+    // pos=8:text "cdef" 内部字符 2
+    let rp = ResolvedPos::resolve(&d, 8).unwrap();
+    assert_eq!(rp.node_before().unwrap().text.as_deref(), Some("cd"));
+    assert_eq!(rp.node_after().unwrap().text.as_deref(), Some("ef"));
+
+    // pos=6:p2 的开头,text_offset=0
+    // node_before = None(index=0), node_after = text("cdef") 整个
+    let rp = ResolvedPos::resolve(&d, 6).unwrap();
+    assert!(rp.node_before().is_none());
+    assert_eq!(rp.node_after().unwrap().text.as_deref(), Some("cdef"));
+
+    // pos=10:p2 的末尾,text 之后
+    // node_before = text("cdef") 整个,node_after = None(index=1==child_count)
+    let rp = ResolvedPos::resolve(&d, 10).unwrap();
+    assert_eq!(rp.node_before().unwrap().text.as_deref(), Some("cdef"));
+    assert!(rp.node_after().is_none());
+}
