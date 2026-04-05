@@ -496,52 +496,38 @@ fn build_dfa_indexed(
 
 /// Convert an indexed DFA state table to Arc<ContentMatch> using two-phase construction.
 ///
-/// Phase 1: create all Arcs with empty edges (refcount = 1).
-/// Phase 2: Arc::get_mut fills edges safely (refcount still 1).
+/// Phase 1: create all Arcs with uninitialized edges (refcount = 1 each).
+/// Phase 2: fill edges via OnceLock::set — safe even when refcount > 1 due to cycles.
 fn build_dfa(
     nfa: &[Vec<NfaEdge>],
     node_types: &IndexMap<String, bool>,
 ) -> Arc<ContentMatch> {
     let states = build_dfa_indexed(nfa, node_types);
 
-    // Phase 1: allocate all Arcs with empty edges
+    // Phase 1: allocate all Arcs with empty OnceLock edges
     let arcs: Vec<Arc<ContentMatch>> = states
         .iter()
         .map(|s| {
             Arc::new(ContentMatch {
                 valid_end: s.valid_end,
                 inline_content: s.inline_content,
-                edges: vec![],
-                wrap_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+                edges: std::sync::OnceLock::new(),
+                wrap_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             })
         })
         .collect();
 
-    // Phase 2: fill edges via raw pointer writes.
-    // At this point every Arc has refcount = 1. We collect each state's edge Vec
-    // (which clones some Arcs, temporarily bumping their refcounts), then write
-    // the Vec directly through a raw pointer — bypassing Arc::get_mut's refcount
-    // check while still being sound because:
-    //   • No shared references to the `edges` field exist yet (refcount check is
-    //     only a conservative proxy for aliasing; here we own all Arcs exclusively).
-    //   • We write each `edges` field exactly once and never alias the write.
+    // Phase 2: fill edges via OnceLock::set (unlike Arc::get_mut, OnceLock::set
+    // is safe regardless of refcount — it only requires the lock is unset)
     for (i, state) in states.iter().enumerate() {
         let edges: Vec<(String, Arc<ContentMatch>)> = state
             .edges
             .iter()
             .map(|(name, idx)| (name.clone(), arcs[*idx].clone()))
             .collect();
-        // SAFETY: arcs[i] was created in Phase 1 and has not been shared with any
-        // other thread or data structure. The pointer is valid and properly aligned.
-        // We write a field that is currently an empty Vec (no destructor side-effects
-        // observable by other code) and immediately leave the raw-pointer scope.
-        unsafe {
-            let ptr = Arc::as_ptr(&arcs[i]) as *mut ContentMatch;
-            std::ptr::write(&raw mut (*ptr).edges, edges);
-        }
+        arcs[i].edges.set(edges).ok(); // panics only if set twice, which cannot happen here
     }
 
-    // State 0 is always the start state
     arcs.into_iter().next().unwrap()
 }
 
@@ -560,7 +546,8 @@ fn check_for_dead_ends(
         i += 1;
         let mut dead = !state.valid_end;
         let mut node_names: Vec<String> = vec![];
-        for (name, next) in &state.edges {
+        let state_edges = state.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        for (name, next) in state_edges {
             node_names.push(name.clone());
             let is_text = name == "text";
             let required = has_required.get(name).copied().unwrap_or(false);
@@ -592,31 +579,25 @@ pub struct ContentMatch {
     /// True when this match state represents a valid end of the node.
     pub valid_end: bool,
     /// True when this match position expects inline content.
-    /// Computed at parse time from the first edge's node type's is_inline flag.
     pub inline_content: bool,
-    /// Outgoing edges: (type_name, next_state). Built via two-phase construction.
-    edges: Vec<(String, Arc<ContentMatch>)>,
-    /// Cache for find_wrapping results: type_name → wrapping path (or None if no wrapping exists).
-    wrap_cache: std::cell::RefCell<std::collections::HashMap<String, Option<Vec<String>>>>,
+    /// Outgoing edges: (type_name, next_state).
+    /// OnceLock enables safe two-phase construction: set once, then read-only.
+    edges: std::sync::OnceLock<Vec<(String, Arc<ContentMatch>)>>,
+    /// Cache for find_wrapping results. Mutex for Send+Sync compatibility.
+    wrap_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Vec<String>>>>,
 }
-
-// SAFETY: `wrap_cache` is only accessed from a single thread at a time in practice
-// (DFA states are constructed single-threaded, and the cache is only read/written
-// during document traversal which does not require cross-thread sharing of individual
-// states). The `Arc<ContentMatch>` graph is read-only after construction.
-// Phase 3 may replace RefCell with Mutex if true concurrent access becomes necessary.
-unsafe impl Send for ContentMatch {}
-unsafe impl Sync for ContentMatch {}
 
 impl ContentMatch {
     /// The empty content match (valid end, no edges). Used for leaf nodes.
     pub fn empty() -> Arc<ContentMatch> {
-        Arc::new(ContentMatch {
+        let cm = Arc::new(ContentMatch {
             valid_end: true,
             inline_content: false,
-            edges: vec![],
-            wrap_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-        })
+            edges: std::sync::OnceLock::new(),
+            wrap_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+        let _ = cm.edges.set(vec![]);
+        cm
     }
 
     /// Match a node type by name, returning the next match state if successful.
@@ -624,15 +605,15 @@ impl ContentMatch {
     /// Match a node type, returning a match after that node if successful.
     pub fn match_type(&self, type_name: &str) -> Option<Arc<ContentMatch>> {
         self.edges
-            .iter()
-            .find(|(name, _)| name == type_name)
+            .get()
+            .and_then(|edges| edges.iter().find(|(name, _)| name == type_name))
             .map(|(_, next)| next.clone())
     }
 
     /// The number of outgoing edges this node has in the finite automaton
     /// that describes the content expression.
     pub fn edge_count(&self) -> usize {
-        self.edges.len()
+        self.edges.get().map_or(0, |e| e.len())
     }
 
     /// Get the nth outgoing edge from this node in the finite automaton
@@ -641,7 +622,8 @@ impl ContentMatch {
     /// Returns `(type_name, next_state)`, or `Err(RangeError)` if n is out of range.
     pub fn edge(&self, n: usize) -> Result<(String, Arc<ContentMatch>), RangeError> {
         self.edges
-            .get(n)
+            .get()
+            .and_then(|edges| edges.get(n))
             .map(|(name, next)| (name.clone(), next.clone()))
             .ok_or_else(|| RangeError(format!("There's no {}th edge in this content match", n)))
     }
@@ -650,8 +632,10 @@ impl ContentMatch {
     ///
     /// Indicates whether this node allows some of the same content as the given match.
     pub fn compatible(&self, other: &ContentMatch) -> bool {
-        for (name, _) in &self.edges {
-            for (other_name, _) in &other.edges {
+        let my_edges = self.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        let other_edges = other.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
+        for (name, _) in my_edges {
+            for (other_name, _) in other_edges {
                 if name == other_name {
                     return true;
                 }
@@ -692,8 +676,8 @@ impl ContentMatch {
     /// Returns the type name, or None if no generatable type exists.
     pub fn default_type(&self) -> Option<String> {
         self.edges
-            .iter()
-            .find(|(name, _)| name != "text")
+            .get()
+            .and_then(|edges| edges.iter().find(|(name, _)| name != "text"))
             .map(|(name, _)| name.clone())
     }
 
@@ -729,13 +713,17 @@ impl ContentMatch {
 mod tests {
     use super::*;
 
-    fn make_state(valid_end: bool, edges: Vec<(&str, Arc<ContentMatch>)>) -> Arc<ContentMatch> {
-        Arc::new(ContentMatch {
+    fn make_state(valid_end: bool, edges_input: Vec<(&str, Arc<ContentMatch>)>) -> Arc<ContentMatch> {
+        let cm = Arc::new(ContentMatch {
             valid_end,
             inline_content: false,
-            edges: edges.into_iter().map(|(n, s)| (n.to_string(), s)).collect(),
-            wrap_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-        })
+            edges: std::sync::OnceLock::new(),
+            wrap_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+        let _ = cm.edges.set(
+            edges_input.into_iter().map(|(n, s)| (n.to_string(), s)).collect()
+        );
+        cm
     }
 
     // state_a --"p"--> state_b (valid_end=true)
