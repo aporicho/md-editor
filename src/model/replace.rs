@@ -5,6 +5,7 @@
 #![allow(dead_code)] // TODO: Phase 4.7 replace 算法完整后移除
 
 use std::sync::OnceLock;
+use serde_json::{Map, Value};
 
 use crate::model::fragment::Fragment;
 
@@ -57,5 +58,27 @@ impl Slice {
     /// Return a debugging string like `<paragraph("hi")>(0,1)`.
     pub fn to_string_repr(&self) -> String {
         format!("{}({},{})", self.content.to_string_repr(), self.open_start, self.open_end)
+    }
+
+    /// Convert a slice to a JSON-serializable representation.
+    /// Returns `None` when content is empty.
+    pub fn to_json(&self) -> Option<Value> {
+        if self.content.size == 0 {
+            return None;
+        }
+        let mut obj = Map::new();
+        // Fragment::to_json returns None for empty content, but here content.size > 0
+        // so it must return Some; unwrap_or an empty array defensively.
+        obj.insert(
+            "content".to_string(),
+            self.content.to_json().unwrap_or(Value::Array(vec![])),
+        );
+        if self.open_start > 0 {
+            obj.insert("openStart".to_string(), Value::from(self.open_start as u64));
+        }
+        if self.open_end > 0 {
+            obj.insert("openEnd".to_string(), Value::from(self.open_end as u64));
+        }
+        Some(Value::Object(obj))
     }
 }

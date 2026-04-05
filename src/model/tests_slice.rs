@@ -79,3 +79,46 @@ fn to_string_repr_empty_slice() {
     let s = Slice::empty();
     assert_eq!(s.to_string_repr(), "<>(0,0)");
 }
+
+#[test]
+fn to_json_empty_slice_returns_none() {
+    let s = Slice::empty();
+    assert!(s.to_json().is_none());
+}
+
+#[test]
+fn to_json_non_empty_no_open_has_only_content() {
+    let s = Slice::new(Fragment::from_node(p(&[t("hi")])), 0, 0);
+    let json = s.to_json().unwrap();
+    let obj = json.as_object().unwrap();
+    assert!(obj.contains_key("content"));
+    assert!(!obj.contains_key("openStart"));
+    assert!(!obj.contains_key("openEnd"));
+}
+
+#[test]
+fn to_json_includes_open_start_when_nonzero() {
+    let s = Slice::new(Fragment::from_node(p(&[t("hi")])), 1, 0);
+    let json = s.to_json().unwrap();
+    let obj = json.as_object().unwrap();
+    assert_eq!(obj.get("openStart").and_then(|v| v.as_u64()), Some(1));
+    assert!(!obj.contains_key("openEnd"));
+}
+
+#[test]
+fn to_json_includes_open_end_when_nonzero() {
+    let s = Slice::new(Fragment::from_node(p(&[t("hi")])), 0, 1);
+    let json = s.to_json().unwrap();
+    let obj = json.as_object().unwrap();
+    assert_eq!(obj.get("openEnd").and_then(|v| v.as_u64()), Some(1));
+    assert!(!obj.contains_key("openStart"));
+}
+
+#[test]
+fn to_json_includes_both_open_fields() {
+    let s = Slice::new(Fragment::from_node(p(&[t("hi")])), 2, 3);
+    let json = s.to_json().unwrap();
+    let obj = json.as_object().unwrap();
+    assert_eq!(obj.get("openStart").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(obj.get("openEnd").and_then(|v| v.as_u64()), Some(3));
+}
