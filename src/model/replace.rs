@@ -46,4 +46,16 @@ impl Slice {
     pub fn size(&self) -> usize {
         self.content.size - self.open_start - self.open_end
     }
+
+    /// Tests whether this slice is equal to another slice.
+    pub fn eq(&self, other: &Slice) -> bool {
+        self.content.eq(&other.content)
+            && self.open_start == other.open_start
+            && self.open_end == other.open_end
+    }
+
+    /// Return a debugging string like `<paragraph("hi")>(0,1)`.
+    pub fn to_string_repr(&self) -> String {
+        format!("{}({},{})", self.content.to_string_repr(), self.open_start, self.open_end)
+    }
 }

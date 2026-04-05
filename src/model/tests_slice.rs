@@ -34,3 +34,48 @@ fn size_zero_open_equals_content_size() {
     let s = Slice::new(content, 0, 0);
     assert_eq!(s.size(), 5); // p 的 size = 2+3 = 5
 }
+
+#[test]
+fn eq_returns_true_for_identical_slices() {
+    let content = Fragment::from_node(p(&[t("x")]));
+    let s1 = Slice::new(content.clone(), 0, 0);
+    let s2 = Slice::new(content, 0, 0);
+    assert!(s1.eq(&s2));
+}
+
+#[test]
+fn eq_returns_false_for_different_open_start() {
+    let content = Fragment::from_node(p(&[t("x")]));
+    let s1 = Slice::new(content.clone(), 0, 0);
+    let s2 = Slice::new(content, 1, 0);
+    assert!(!s1.eq(&s2));
+}
+
+#[test]
+fn eq_returns_false_for_different_open_end() {
+    let content = Fragment::from_node(p(&[t("x")]));
+    let s1 = Slice::new(content.clone(), 0, 0);
+    let s2 = Slice::new(content, 0, 1);
+    assert!(!s1.eq(&s2));
+}
+
+#[test]
+fn eq_returns_false_for_different_content() {
+    let s1 = Slice::new(Fragment::from_node(p(&[t("a")])), 0, 0);
+    let s2 = Slice::new(Fragment::from_node(p(&[t("b")])), 0, 0);
+    assert!(!s1.eq(&s2));
+}
+
+#[test]
+fn to_string_repr_includes_open_depths() {
+    // content = <paragraph("hi")>，open_start = 0, open_end = 1
+    let s = Slice::new(Fragment::from_node(p(&[t("hi")])), 0, 1);
+    // 格式：<fragment_inner>(open_start,open_end)
+    assert_eq!(s.to_string_repr(), "<paragraph(\"hi\")>(0,1)");
+}
+
+#[test]
+fn to_string_repr_empty_slice() {
+    let s = Slice::empty();
+    assert_eq!(s.to_string_repr(), "<>(0,0)");
+}
