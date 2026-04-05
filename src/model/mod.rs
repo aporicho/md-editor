@@ -12,6 +12,7 @@ mod tests_mark;
 pub mod fragment;
 pub mod node;
 pub mod diff;
+pub mod replace;
 #[cfg(test)]
 mod tests_diff;
 #[cfg(test)]
@@ -20,3 +21,5 @@ pub(crate) mod test_builder;
 mod tests_node;
 #[cfg(test)]
 mod tests_content;
+#[cfg(test)]
+mod tests_slice;
