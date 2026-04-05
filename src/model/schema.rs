@@ -791,7 +791,15 @@ impl Schema {
             .map(|(n, nt)| (n.clone(), nt.has_required_attrs()))
             .collect();
 
-        // --- Second pass: fill NodeType fields (refcount = 1, Arc::get_mut safe) ---
+        // --- Second pass: fill MarkType.excluded (must happen before NodeType fills,
+        //     because resolve_mark_set clones Arc<MarkType> which would raise refcount > 1) ---
+        for (name, ms) in &spec.marks {
+            let excluded =
+                resolve_excluded(ms.excludes.as_deref(), name, &mark_types)?;
+            Arc::get_mut(mark_types.get_mut(name).unwrap()).unwrap().excluded = excluded;
+        }
+
+        // --- Third pass: fill NodeType fields (refcount = 1, Arc::get_mut safe) ---
         let mut linebreak_replacement: Option<Arc<NodeType>> = None;
         for (name, ns) in &spec.nodes {
             let nt = Arc::get_mut(node_types.get_mut(name).unwrap()).unwrap();
@@ -818,13 +826,6 @@ impl Schema {
             }
         }
 
-        // --- Second pass: fill MarkType.excluded ---
-        for (name, ms) in &spec.marks {
-            let excluded =
-                resolve_excluded(ms.excludes.as_deref(), name, &mark_types)?;
-            Arc::get_mut(mark_types.get_mut(name).unwrap()).unwrap().excluded = excluded;
-        }
-
         let top_node_type = node_types[top_name].clone();
         Ok(Arc::new(Schema {
             nodes: node_types,
@@ -833,6 +834,66 @@ impl Schema {
             linebreak_replacement,
             spec,
         }))
+    }
+
+    /// Look up a node type by name.
+    ///
+    /// @internal
+    pub fn node_type(&self, name: &str) -> Result<&Arc<NodeType>, crate::model::errors::SchemaError> {
+        self.nodes.get(name).ok_or_else(|| {
+            crate::model::errors::SchemaError(format!("Unknown node type: {}", name))
+        })
+    }
+
+    /// Look up a mark type by name.
+    ///
+    /// @internal
+    pub fn mark_type(&self, name: &str) -> Result<&Arc<MarkType>, crate::model::errors::SchemaError> {
+        self.marks.get(name).ok_or_else(|| {
+            crate::model::errors::SchemaError(format!("Unknown mark type: {}", name))
+        })
+    }
+
+    // ---- Phase 3 stubs (依赖 Node / Fragment / Mark) ----
+
+    /// Create a node in this schema.
+    ///
+    /// NOTE: stub — requires Node/Fragment/Mark (Phase 3).
+    #[allow(unused)]
+    pub fn node_stub(&self) -> ! {
+        todo!("Schema::node requires Node/Fragment/Mark — implement in Phase 3")
+    }
+
+    /// Create a text node in the schema.
+    ///
+    /// NOTE: stub — requires Node (Phase 3).
+    #[allow(unused)]
+    pub fn text_stub(&self) -> ! {
+        todo!("Schema::text requires Node — implement in Phase 3")
+    }
+
+    /// Create a mark with the given type and attributes.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn mark_stub(&self) -> ! {
+        todo!("Schema::mark requires Mark — implement in Phase 3")
+    }
+
+    /// Deserialize a node from its JSON representation.
+    ///
+    /// NOTE: stub — requires Node (Phase 3).
+    #[allow(unused)]
+    pub fn node_from_json_stub(&self) -> ! {
+        todo!("Schema::node_from_json requires Node — implement in Phase 3")
+    }
+
+    /// Deserialize a mark from its JSON representation.
+    ///
+    /// NOTE: stub — requires Mark (Phase 3).
+    #[allow(unused)]
+    pub fn mark_from_json_stub(&self) -> ! {
+        todo!("Schema::mark_from_json requires Mark — implement in Phase 3")
     }
 }
 
@@ -1409,6 +1470,184 @@ mod tests {
         let mut spec = minimal_schema_spec();
         spec.marks.insert("paragraph".to_string(), MarkSpec::default());
         assert!(Schema::new(spec).is_err());
+    }
+
+    #[test]
+    fn schema_paragraph_content_match_valid_end() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let p = &s.nodes["paragraph"];
+        assert!(p.content_match.valid_end); // "text*" can match zero texts
+    }
+
+    #[test]
+    fn schema_paragraph_is_textblock() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let p = &s.nodes["paragraph"];
+        assert!(p.is_block);
+        assert!(p.inline_content);
+        assert!(p.is_textblock());
+    }
+
+    #[test]
+    fn schema_text_is_leaf_inline() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let t = &s.nodes["text"];
+        assert!(t.is_text);
+        assert!(t.is_leaf());
+        assert!(t.is_inline());
+    }
+
+    #[test]
+    fn schema_block_node_has_no_marks_by_default() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let doc = &s.nodes["doc"];
+        assert_eq!(doc.mark_set.as_ref().map(|v| v.len()), Some(0));
+    }
+
+    #[test]
+    fn schema_inline_node_allows_all_marks_by_default() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let p = &s.nodes["paragraph"];
+        assert!(p.mark_set.is_none());
+    }
+
+    fn schema_with_marks_spec() -> SchemaSpec {
+        use indexmap::indexmap;
+        SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec {
+                    content: Some("paragraph+".to_string()),
+                    ..NodeSpec::default()
+                },
+                "paragraph".to_string() => NodeSpec {
+                    content: Some("text*".to_string()),
+                    marks: Some("em strong".to_string()),
+                    group: Some("block".to_string()),
+                    ..NodeSpec::default()
+                },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: indexmap! {
+                "em".to_string() => MarkSpec::default(),
+                "strong".to_string() => MarkSpec::default(),
+            },
+            top_node: None,
+        }
+    }
+
+    #[test]
+    fn schema_builds_with_marks() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        assert!(s.marks.contains_key("em"));
+        assert!(s.marks.contains_key("strong"));
+    }
+
+    #[test]
+    fn schema_marks_get_rank() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        assert_eq!(s.marks["em"].rank, 0);
+        assert_eq!(s.marks["strong"].rank, 1);
+    }
+
+    #[test]
+    fn schema_mark_set_limited_to_specified() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        let p = &s.nodes["paragraph"];
+        let mark_set = p.mark_set.as_ref().unwrap();
+        assert_eq!(mark_set.len(), 2);
+        assert!(mark_set.iter().any(|m| m.name == "em"));
+        assert!(mark_set.iter().any(|m| m.name == "strong"));
+    }
+
+    #[test]
+    fn schema_mark_excludes_self_only_by_default() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        let em = &s.marks["em"];
+        assert!(em.excludes(em));
+        assert!(!em.excludes(&s.marks["strong"]));
+    }
+
+    #[test]
+    fn schema_mark_excludes_all() {
+        use indexmap::indexmap;
+        let spec = SchemaSpec {
+            nodes: minimal_schema_spec().nodes,
+            marks: indexmap! {
+                "code".to_string() => MarkSpec {
+                    excludes: Some("_".to_string()),
+                    ..MarkSpec::default()
+                },
+                "em".to_string() => MarkSpec::default(),
+            },
+            top_node: None,
+        };
+        let s = Schema::new(spec).unwrap();
+        let code = &s.marks["code"];
+        let em = &s.marks["em"];
+        assert!(code.excludes(em));
+        assert!(code.excludes(code));
+    }
+
+    #[test]
+    fn schema_mark_set_all_with_underscore() {
+        use indexmap::indexmap;
+        let spec = SchemaSpec {
+            nodes: {
+                let mut nodes = minimal_schema_spec().nodes;
+                nodes.get_mut("paragraph").unwrap().marks = Some("_".to_string());
+                nodes
+            },
+            marks: indexmap! {
+                "em".to_string() => MarkSpec::default(),
+            },
+            top_node: None,
+        };
+        let s = Schema::new(spec).unwrap();
+        let p = &s.nodes["paragraph"];
+        assert!(p.mark_set.is_none());
+    }
+
+    #[test]
+    fn schema_error_bad_content_expression() {
+        use indexmap::indexmap;
+        let spec = SchemaSpec {
+            nodes: indexmap! {
+                "doc".to_string() => NodeSpec {
+                    content: Some("nonexistent_type+".to_string()),
+                    ..NodeSpec::default()
+                },
+                "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+            },
+            marks: IndexMap::new(),
+            top_node: None,
+        };
+        assert!(Schema::new(spec).is_err());
+    }
+
+    #[test]
+    fn schema_node_type_lookup_ok() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        let nt = s.node_type("paragraph").unwrap();
+        assert_eq!(nt.name, "paragraph");
+    }
+
+    #[test]
+    fn schema_node_type_lookup_err() {
+        let s = Schema::new(minimal_schema_spec()).unwrap();
+        assert!(s.node_type("nonexistent").is_err());
+    }
+
+    #[test]
+    fn schema_mark_type_lookup_ok() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        let mt = s.mark_type("em").unwrap();
+        assert_eq!(mt.name, "em");
+    }
+
+    #[test]
+    fn schema_mark_type_lookup_err() {
+        let s = Schema::new(schema_with_marks_spec()).unwrap();
+        assert!(s.mark_type("nonexistent").is_err());
     }
 }
 
