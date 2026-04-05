@@ -27,16 +27,15 @@ enum Expr {
     Star(Box<Expr>),
     Opt(Box<Expr>),
     Range { min: usize, max: Option<usize>, expr: Box<Expr> },
-    /// A resolved node type name (plus inline flag for the DFA builder).
-    Name { type_name: String, is_inline: bool },
+    /// A resolved node type weak reference (for the DFA builder).
+    Name { node_type: std::sync::Weak<crate::model::schema::NodeType> },
 }
 
 /// Tokenizer for content expressions such as `"paragraph horizontal_rule paragraph"`.
 #[allow(dead_code)]
 struct TokenStream<'a> {
     string: &'a str,
-    /// Map from node type name to is_inline flag.
-    node_types: &'a IndexMap<String, bool>,
+    node_types: &'a IndexMap<String, Arc<crate::model::schema::NodeType>>,
     tokens: Vec<String>,
     pos: usize,
 }
@@ -45,7 +44,7 @@ struct TokenStream<'a> {
 impl<'a> TokenStream<'a> {
     fn new(
         string: &'a str,
-        node_types: &'a IndexMap<String, bool>,
+        node_types: &'a IndexMap<String, Arc<crate::model::schema::NodeType>>,
     ) -> Self {
         // Split on whitespace boundaries and non-word characters (mirrors TS: /\s*(?=\b|\W|$)/)
         let mut tokens: Vec<String> = vec![];
@@ -165,27 +164,33 @@ fn parse_expr_range(stream: &mut TokenStream, expr: Expr) -> Result<Expr, Syntax
     Ok(Expr::Range { min, max, expr: Box::new(expr) })
 }
 
-/// Resolves a name token to (type_name, is_inline) pairs.
+/// Resolves a name token to a list of Weak<NodeType>.
 /// The name may be a direct type name or a group name.
 #[allow(dead_code)]
 fn resolve_name(
     stream: &TokenStream,
     name: &str,
     groups: &IndexMap<String, Vec<String>>,
-) -> Result<Vec<(String, bool)>, SyntaxError> {
+) -> Result<Vec<std::sync::Weak<crate::model::schema::NodeType>>, SyntaxError> {
     // Direct type name
-    if let Some(&is_inline) = stream.node_types.get(name) {
-        return Ok(vec![(name.to_string(), is_inline)]);
+    if let Some(nt) = stream.node_types.get(name) {
+        return Ok(vec![Arc::downgrade(nt)]);
     }
     // Group name
     if let Some(members) = groups.get(name) {
         if members.is_empty() {
             return Err(stream.err(&format!("No node type or group '{}' found", name)));
         }
-        return Ok(members
+        let result: Result<Vec<_>, _> = members
             .iter()
-            .map(|n| (n.clone(), *stream.node_types.get(n).unwrap_or(&false)))
-            .collect());
+            .map(|n| {
+                stream.node_types
+                    .get(n)
+                    .map(|nt| Arc::downgrade(nt))
+                    .ok_or_else(|| stream.err(&format!("Unknown node type '{}' in group '{}'", n, name)))
+            })
+            .collect();
+        return result;
     }
     Err(stream.err(&format!("No node type or group '{}' found", name)))
 }
@@ -210,16 +215,17 @@ fn parse_expr_atom(
     if tok.chars().all(|c| c.is_alphanumeric() || c == '_') {
         let resolved = resolve_name(stream, &tok, groups)?;
         stream.pos += 1;
-        // Check mixing inline/block (mirror TS behavior)
-        let first_inline = resolved[0].1;
-        for (_, is_inline) in &resolved {
-            if *is_inline != first_inline {
+        // Check mixing inline/block
+        let first_inline = resolved[0].upgrade().map_or(false, |nt| nt.is_inline());
+        for weak in &resolved {
+            let is_inline = weak.upgrade().map_or(false, |nt| nt.is_inline());
+            if is_inline != first_inline {
                 return Err(stream.err("Mixing inline and block content"));
             }
         }
         let exprs: Vec<Expr> = resolved
             .into_iter()
-            .map(|(type_name, is_inline)| Expr::Name { type_name, is_inline })
+            .map(|weak_nt| Expr::Name { node_type: weak_nt })
             .collect();
         Ok(if exprs.len() == 1 {
             exprs.into_iter().next().unwrap()
@@ -234,7 +240,7 @@ fn parse_expr_atom(
 #[derive(Debug, Clone)]
 struct NfaEdge {
     /// None = ε-edge (epsilon/null transition)
-    term: Option<String>,
+    term: Option<std::sync::Weak<crate::model::schema::NodeType>>,
     /// Target state index. usize::MAX means "dangling" (not yet connected).
     to: usize,
 }
@@ -344,10 +350,10 @@ fn nfa_compile(
                 }
             }
         }
-        Expr::Name { type_name, .. } => {
+        Expr::Name { node_type } => {
             let edge_idx = nfa[from].len();
             nfa[from].push(NfaEdge {
-                term: Some(type_name.clone()),
+                term: Some(node_type.clone()),
                 to: usize::MAX,
             });
             vec![(from, edge_idx)]
@@ -409,21 +415,17 @@ fn null_from(nfa: &[Vec<NfaEdge>], state: usize) -> Vec<usize> {
 struct DfaState {
     valid_end: bool,
     inline_content: bool,
-    /// Edges: (type_name, target_state_index).
-    edges: Vec<(String, usize)>,
+    /// Edges: (weak node type ref, target_state_index).
+    edges: Vec<(std::sync::Weak<crate::model::schema::NodeType>, usize)>,
 }
 
 /// Build a DFA from an NFA using subset construction, producing an indexed state table.
-///
-/// Returns (states, start_index) where `states[start_index]` is the initial state.
 fn build_dfa_indexed(
     nfa: &[Vec<NfaEdge>],
-    node_types: &IndexMap<String, bool>,
 ) -> Vec<DfaState> {
     use std::collections::HashMap;
     let accept_state = nfa.len() - 1;
 
-    // Map from sorted state-set key → index in `states` vec
     let mut labeled: HashMap<String, usize> = HashMap::new();
     let mut states: Vec<DfaState> = Vec::new();
 
@@ -437,7 +439,6 @@ fn build_dfa_indexed(
         state_set: Vec<usize>,
         nfa: &[Vec<NfaEdge>],
         accept_state: usize,
-        node_types: &IndexMap<String, bool>,
         labeled: &mut HashMap<String, usize>,
         states: &mut Vec<DfaState>,
     ) -> usize {
@@ -446,15 +447,17 @@ fn build_dfa_indexed(
             return idx;
         }
 
-        // Collect outgoing edges grouped by term
-        let mut out: Vec<(String, Vec<usize>)> = vec![];
+        // Collect outgoing edges grouped by Weak<NodeType> pointer (Weak::ptr_eq)
+        let mut out: Vec<(std::sync::Weak<crate::model::schema::NodeType>, Vec<usize>)> = vec![];
         for &node in &state_set {
             for edge in &nfa[node] {
-                if let Some(term) = &edge.term {
-                    let set_idx = if let Some(pos) = out.iter().position(|(t, _)| t == term) {
+                if let Some(weak_nt) = &edge.term {
+                    let set_idx = if let Some(pos) = out.iter().position(|(w, _)| {
+                        std::sync::Weak::ptr_eq(w, weak_nt)
+                    }) {
                         pos
                     } else {
-                        out.push((term.clone(), vec![]));
+                        out.push((weak_nt.clone(), vec![]));
                         out.len() - 1
                     };
                     for ns in null_from(nfa, edge.to) {
@@ -469,20 +472,18 @@ fn build_dfa_indexed(
         let valid_end = state_set.contains(&accept_state);
         let inline_content = out
             .first()
-            .and_then(|(t, _)| node_types.get(t).copied())
-            .unwrap_or(false);
+            .and_then(|(w, _)| w.upgrade())
+            .map_or(false, |nt| nt.is_inline());
 
-        // Register before recursing to handle cycles
         let idx = states.len();
         labeled.insert(k, idx);
         states.push(DfaState { valid_end, inline_content, edges: vec![] });
 
-        // Build edges by recursing
-        let mut edges: Vec<(String, usize)> = vec![];
-        for (term, mut target) in out {
+        let mut edges: Vec<(std::sync::Weak<crate::model::schema::NodeType>, usize)> = vec![];
+        for (weak_nt, mut target) in out {
             target.sort_by(|a, b| b.cmp(a));
-            let child_idx = explore(target, nfa, accept_state, node_types, labeled, states);
-            edges.push((term, child_idx));
+            let child_idx = explore(target, nfa, accept_state, labeled, states);
+            edges.push((weak_nt, child_idx));
         }
         states[idx].edges = edges;
 
@@ -490,21 +491,16 @@ fn build_dfa_indexed(
     }
 
     let start = null_from(nfa, 0);
-    explore(start, nfa, accept_state, node_types, &mut labeled, &mut states);
+    explore(start, nfa, accept_state, &mut labeled, &mut states);
     states
 }
 
 /// Convert an indexed DFA state table to Arc<ContentMatch> using two-phase construction.
-///
-/// Phase 1: create all Arcs with uninitialized edges (refcount = 1 each).
-/// Phase 2: fill edges via OnceLock::set — safe even when refcount > 1 due to cycles.
 fn build_dfa(
     nfa: &[Vec<NfaEdge>],
-    node_types: &IndexMap<String, bool>,
 ) -> Arc<ContentMatch> {
-    let states = build_dfa_indexed(nfa, node_types);
+    let states = build_dfa_indexed(nfa);
 
-    // Phase 1: allocate all Arcs with empty OnceLock edges
     let arcs: Vec<Arc<ContentMatch>> = states
         .iter()
         .map(|s| {
@@ -517,27 +513,22 @@ fn build_dfa(
         })
         .collect();
 
-    // Phase 2: fill edges via OnceLock::set (unlike Arc::get_mut, OnceLock::set
-    // is safe regardless of refcount — it only requires the lock is unset)
     for (i, state) in states.iter().enumerate() {
-        let edges: Vec<(String, Arc<ContentMatch>)> = state
+        let edges: Vec<(std::sync::Weak<crate::model::schema::NodeType>, Arc<ContentMatch>)> = state
             .edges
             .iter()
-            .map(|(name, idx)| (name.clone(), arcs[*idx].clone()))
+            .map(|(weak_nt, idx)| (weak_nt.clone(), arcs[*idx].clone()))
             .collect();
-        arcs[i].edges.set(edges).ok(); // panics only if set twice, which cannot happen here
+        arcs[i].edges.set(edges).ok();
     }
 
     arcs.into_iter().next().unwrap()
 }
 
 /// Check that every non-valid-end state has at least one generatable outgoing type.
-///
-/// A generatable type is one that is not "text" and has no required attrs.
 fn check_for_dead_ends(
     start: &Arc<ContentMatch>,
     expr_str: &str,
-    has_required: &IndexMap<String, bool>,
 ) -> Result<(), SyntaxError> {
     let mut work: Vec<Arc<ContentMatch>> = vec![start.clone()];
     let mut i = 0;
@@ -547,12 +538,12 @@ fn check_for_dead_ends(
         let mut dead = !state.valid_end;
         let mut node_names: Vec<String> = vec![];
         let state_edges = state.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
-        for (name, next) in state_edges {
-            node_names.push(name.clone());
-            let is_text = name == "text";
-            let required = has_required.get(name).copied().unwrap_or(false);
-            if !(is_text || required) {
-                dead = false;
+        for (weak_nt, next) in state_edges {
+            if let Some(nt) = weak_nt.upgrade() {
+                node_names.push(nt.name.clone());
+                if !(nt.is_text || nt.has_required_attrs()) {
+                    dead = false;
+                }
             }
             if !work.iter().any(|w| Arc::ptr_eq(w, next)) {
                 work.push(next.clone());
@@ -569,30 +560,22 @@ fn check_for_dead_ends(
     Ok(())
 }
 
-/// DFS helper for fill_before: finds what nodes to insert before `after`.
-///
-/// - `match_state`: current ContentMatch state
-/// - `types`: accumulated list of node type names to insert
-/// - `seen`: visited states to avoid cycles (compared by Arc pointer equality)
+/// DFS 辅助函数，搜索需要在 `after` 前插入的节点类型列表。
 fn fill_before_search(
     match_state: &Arc<ContentMatch>,
-    types: &[String],
+    types: &[std::sync::Weak<crate::model::schema::NodeType>],
     seen: &mut Vec<Arc<ContentMatch>>,
-    schema: &Arc<crate::model::schema::Schema>,
     after: &crate::model::fragment::Fragment,
     to_end: bool,
     start_index: usize,
 ) -> Option<crate::model::fragment::Fragment> {
-    // Try to match after[start_index..] from current state
     if let Some(finished) = match_state.match_fragment(after, start_index, after.child_count()) {
-        // When to_end=false: condition is always true (just need match to succeed)
-        // When to_end=true: also need to reach a valid end state
         if !to_end || finished.valid_end {
             let nodes: Option<Vec<crate::model::node::Node>> = types
                 .iter()
-                .map(|type_name| {
-                    let nt = schema.nodes.get(type_name)?;
-                    nt.create_and_fill(schema, None, vec![])
+                .map(|weak_nt| {
+                    let nt = weak_nt.upgrade()?;
+                    nt.create_and_fill(None, vec![])
                 })
                 .collect();
             if let Some(nodes) = nodes {
@@ -601,25 +584,18 @@ fn fill_before_search(
         }
     }
 
-    // Explore outgoing edges to find what to prepend
     let edges = match_state.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
-    for (type_name, next_state) in edges {
-        if let Some(nt) = schema.nodes.get(type_name) {
+    for (weak_nt, next_state) in edges {
+        if let Some(nt) = weak_nt.upgrade() {
             if !nt.is_text
                 && !nt.has_required_attrs()
                 && !seen.iter().any(|s| Arc::ptr_eq(s, next_state))
             {
                 seen.push(next_state.clone());
                 let mut new_types = types.to_vec();
-                new_types.push(type_name.clone());
+                new_types.push(weak_nt.clone());
                 if let Some(found) = fill_before_search(
-                    next_state,
-                    &new_types,
-                    seen,
-                    schema,
-                    after,
-                    to_end,
-                    start_index,
+                    next_state, &new_types, seen, after, to_end, start_index,
                 ) {
                     return Some(found);
                 }
@@ -640,9 +616,10 @@ pub struct ContentMatch {
     pub valid_end: bool,
     /// True when this match position expects inline content.
     pub inline_content: bool,
-    /// Outgoing edges: (type_name, next_state).
+    /// Outgoing edges: (weak ref to NodeType, next_state).
     /// OnceLock enables safe two-phase construction: set once, then read-only.
-    edges: std::sync::OnceLock<Vec<(String, Arc<ContentMatch>)>>,
+    /// Weak<NodeType> breaks the Arc cycle: NodeType → Arc<ContentMatch> → Weak<NodeType>.
+    edges: std::sync::OnceLock<Vec<(std::sync::Weak<crate::model::schema::NodeType>, Arc<ContentMatch>)>>,
     /// Cache for find_wrapping results. Mutex for Send+Sync compatibility.
     wrap_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Vec<String>>>>,
 }
@@ -664,10 +641,10 @@ impl ContentMatch {
     ///
     /// Match a node type, returning a match after that node if successful.
     pub fn match_type(&self, type_name: &str) -> Option<Arc<ContentMatch>> {
-        self.edges
-            .get()
-            .and_then(|edges| edges.iter().find(|(name, _)| name == type_name))
-            .map(|(_, next)| next.clone())
+        self.edges.get()?.iter().find_map(|(weak_nt, next)| {
+            let nt = weak_nt.upgrade()?;
+            if nt.name == type_name { Some(next.clone()) } else { None }
+        })
     }
 
     /// The number of outgoing edges this node has in the finite automaton
@@ -684,7 +661,11 @@ impl ContentMatch {
         self.edges
             .get()
             .and_then(|edges| edges.get(n))
-            .map(|(name, next)| (name.clone(), next.clone()))
+            .map(|(weak_nt, next)| {
+                let name = weak_nt.upgrade()
+                    .map_or_else(|| "<dropped>".to_string(), |nt| nt.name.clone());
+                (name, next.clone())
+            })
             .ok_or_else(|| RangeError(format!("There's no {}th edge in this content match", n)))
     }
 
@@ -694,9 +675,9 @@ impl ContentMatch {
     pub fn compatible(&self, other: &ContentMatch) -> bool {
         let my_edges = self.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
         let other_edges = other.edges.get().map(|v| v.as_slice()).unwrap_or(&[]);
-        for (name, _) in my_edges {
-            for (other_name, _) in other_edges {
-                if name == other_name {
+        for (weak_a, _) in my_edges {
+            for (weak_b, _) in other_edges {
+                if std::sync::Weak::ptr_eq(weak_a, weak_b) {
                     return true;
                 }
             }
@@ -706,14 +687,12 @@ impl ContentMatch {
 
     /// Parse a content expression string into a DFA.
     ///
-    /// `node_types`: map from type name to `is_inline` flag.
+    /// `node_types`: map from type name to Arc<NodeType>.
     /// `groups`: map from group name to list of type names in that group.
-    /// `has_required_attrs`: map from type name to whether it has required attrs (no default).
     pub fn parse(
         expr: &str,
-        node_types: &IndexMap<String, bool>,
+        node_types: &IndexMap<String, Arc<crate::model::schema::NodeType>>,
         groups: &IndexMap<String, Vec<String>>,
-        has_required_attrs: &IndexMap<String, bool>,
     ) -> Result<Arc<ContentMatch>, SyntaxError> {
         if expr.trim().is_empty() {
             return Ok(ContentMatch::empty());
@@ -724,8 +703,8 @@ impl ContentMatch {
             return Err(stream.err("Unexpected trailing text"));
         }
         let nfa = build_nfa(&ast);
-        let dfa = build_dfa(&nfa, node_types);
-        check_for_dead_ends(&dfa, expr, has_required_attrs)?;
+        let dfa = build_dfa(&nfa);
+        check_for_dead_ends(&dfa, expr)?;
         Ok(dfa)
     }
 
@@ -735,10 +714,10 @@ impl ContentMatch {
     /// be generated. A type is generatable if it is not "text".
     /// Returns the type name, or None if no generatable type exists.
     pub fn default_type(&self) -> Option<String> {
-        self.edges
-            .get()
-            .and_then(|edges| edges.iter().find(|(name, _)| name != "text"))
-            .map(|(name, _)| name.clone())
+        self.edges.get()?.iter().find_map(|(weak_nt, _)| {
+            let nt = weak_nt.upgrade()?;
+            if !nt.is_text && !nt.has_required_attrs() { Some(nt.name.clone()) } else { None }
+        })
     }
 
     // ---- Phase 3 stubs (依赖 Fragment，届时补全) ----
@@ -769,13 +748,12 @@ impl ContentMatch {
     /// the resulting match goes to the end of the content expression.
     pub fn fill_before(
         self: &Arc<Self>,
-        schema: &Arc<crate::model::schema::Schema>,
         after: &crate::model::fragment::Fragment,
         to_end: bool,
         start_index: usize,
     ) -> Option<crate::model::fragment::Fragment> {
         let mut seen: Vec<Arc<ContentMatch>> = vec![self.clone()];
-        fill_before_search(self, &[], &mut seen, schema, after, to_end, start_index)
+        fill_before_search(self, &[], &mut seen, after, to_end, start_index)
     }
 
     /// Find a set of wrapping node type names that would allow a node of the given type
@@ -792,7 +770,28 @@ impl ContentMatch {
 mod tests {
     use super::*;
 
-    fn make_state(valid_end: bool, edges_input: Vec<(&str, Arc<ContentMatch>)>) -> Arc<ContentMatch> {
+    use crate::model::schema::{NodeType, NodeSpec, Whitespace};
+
+    /// 构建一个测试用的假 Arc<NodeType>（无需完整 Schema）
+    fn make_node_type(name: &str, is_inline: bool) -> Arc<NodeType> {
+        Arc::new(NodeType {
+            name: name.to_string(),
+            is_block: !is_inline,
+            is_text: name == "text",
+            inline_content: false,
+            groups: vec![],
+            content_match: ContentMatch::empty(),
+            mark_set: None,
+            whitespace: Whitespace::Normal,
+            spec: NodeSpec::default(),
+            default_attrs: Some(Arc::new(Default::default())),
+        })
+    }
+
+    fn make_state(
+        valid_end: bool,
+        edges_input: Vec<(Arc<NodeType>, Arc<ContentMatch>)>,
+    ) -> Arc<ContentMatch> {
         let cm = Arc::new(ContentMatch {
             valid_end,
             inline_content: false,
@@ -800,20 +799,22 @@ mod tests {
             wrap_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let _ = cm.edges.set(
-            edges_input.into_iter().map(|(n, s)| (n.to_string(), s)).collect()
+            edges_input.into_iter().map(|(nt, s)| (Arc::downgrade(&nt), s)).collect()
         );
         cm
     }
 
-    // state_a --"p"--> state_b (valid_end=true)
-    fn two_state_dfa() -> Arc<ContentMatch> {
+    // state_a --p--> state_b (valid_end=true)
+    fn two_state_dfa() -> (Arc<ContentMatch>, Arc<NodeType>) {
+        let nt_p = make_node_type("p", false);
         let state_b = make_state(true, vec![]);
-        make_state(false, vec![("p", state_b)])
+        let state_a = make_state(false, vec![(nt_p.clone(), state_b)]);
+        (state_a, nt_p)
     }
 
     #[test]
     fn match_type_hit() {
-        let m = two_state_dfa();
+        let (m, _nt) = two_state_dfa();
         let next = m.match_type("p");
         assert!(next.is_some());
         assert!(next.unwrap().valid_end);
@@ -821,7 +822,7 @@ mod tests {
 
     #[test]
     fn match_type_miss() {
-        let m = two_state_dfa();
+        let (m, _nt) = two_state_dfa();
         assert!(m.match_type("h1").is_none());
     }
 
@@ -834,9 +835,11 @@ mod tests {
 
     #[test]
     fn edge_count_and_edge() {
+        let nt_p = make_node_type("p", false);
+        let nt_h1 = make_node_type("h1", false);
         let state_b = make_state(true, vec![]);
         let state_c = make_state(false, vec![]);
-        let m = make_state(false, vec![("p", state_b), ("h1", state_c)]);
+        let m = make_state(false, vec![(nt_p, state_b), (nt_h1, state_c)]);
         assert_eq!(m.edge_count(), 2);
         let (name, _) = m.edge(0).unwrap();
         assert_eq!(name, "p");
@@ -852,25 +855,28 @@ mod tests {
 
     #[test]
     fn compatible_same_type() {
+        let nt_p = make_node_type("p", false);
         let state_b = make_state(true, vec![]);
-        let m1 = make_state(false, vec![("p", state_b.clone())]);
-        let m2 = make_state(false, vec![("p", state_b.clone())]);
+        let m1 = make_state(false, vec![(nt_p.clone(), state_b.clone())]);
+        let m2 = make_state(false, vec![(nt_p.clone(), state_b.clone())]);
         assert!(m1.compatible(&m2));
     }
 
     #[test]
     fn compatible_different_types() {
+        let nt_p = make_node_type("p", false);
+        let nt_h1 = make_node_type("h1", false);
         let sb = make_state(true, vec![]);
         let sc = make_state(true, vec![]);
-        let m1 = make_state(false, vec![("p", sb)]);
-        let m2 = make_state(false, vec![("h1", sc)]);
+        let m1 = make_state(false, vec![(nt_p, sb)]);
+        let m2 = make_state(false, vec![(nt_h1, sc)]);
         assert!(!m1.compatible(&m2));
     }
 
     // ---- helpers for parse tests ----
 
-    fn make_node_types(names: &[(&str, bool)]) -> IndexMap<String, bool> {
-        names.iter().map(|(n, b)| (n.to_string(), *b)).collect()
+    fn make_node_types_arc(names: &[(&str, bool)]) -> IndexMap<String, Arc<NodeType>> {
+        names.iter().map(|(n, is_inline)| (n.to_string(), make_node_type(n, *is_inline))).collect()
     }
 
     fn make_groups(g: &[(&str, &[&str])]) -> IndexMap<String, Vec<String>> {
@@ -881,12 +887,8 @@ mod tests {
             .collect()
     }
 
-    fn make_required(names: &[&str]) -> IndexMap<String, bool> {
-        names.iter().map(|n| (n.to_string(), false)).collect()
-    }
-
-    fn node_types_basic() -> IndexMap<String, bool> {
-        make_node_types(&[
+    fn node_types_basic() -> IndexMap<String, Arc<NodeType>> {
+        make_node_types_arc(&[
             ("paragraph", false),
             ("heading", false),
             ("horizontal_rule", false),
@@ -904,12 +906,8 @@ mod tests {
         ])
     }
 
-    fn required_basic() -> IndexMap<String, bool> {
-        make_required(&["paragraph", "heading", "horizontal_rule", "image", "text", "hard_break", "code_block"])
-    }
-
     fn parse_ok(expr: &str) -> Arc<ContentMatch> {
-        ContentMatch::parse(expr, &node_types_basic(), &groups_basic(), &required_basic())
+        ContentMatch::parse(expr, &node_types_basic(), &groups_basic())
             .expect("parse should succeed")
     }
 
@@ -1017,7 +1015,6 @@ mod tests {
             "unknown_type",
             &node_types_basic(),
             &groups_basic(),
-            &required_basic(),
         );
         assert!(res.is_err());
     }

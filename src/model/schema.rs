@@ -491,7 +491,6 @@ impl NodeType {
     /// If no fitting content can be constructed, returns `None`.
     pub fn create_and_fill(
         self: &Arc<Self>,
-        schema: &Arc<Schema>,
         attrs: Option<&std::collections::HashMap<String, serde_json::Value>>,
         marks: Vec<crate::model::mark::Mark>,
     ) -> Option<crate::model::node::Node> {
@@ -505,7 +504,6 @@ impl NodeType {
         let matched = self.content_match.match_fragment(&content, 0, 0)?;
         // Fill to reach a valid end from matched state
         let after = matched.fill_before(
-            schema,
             &crate::model::fragment::Fragment::empty(),
             true,
             0,
@@ -855,10 +853,6 @@ impl Schema {
         }
 
         // --- Build helper maps for ContentMatch::parse ---
-        let is_inline_map: IndexMap<String, bool> = node_types
-            .iter()
-            .map(|(n, nt)| (n.clone(), nt.is_inline()))
-            .collect();
         let groups_map: IndexMap<String, Vec<String>> = {
             let mut map: IndexMap<String, Vec<String>> = IndexMap::new();
             for (name, nt) in &node_types {
@@ -868,10 +862,6 @@ impl Schema {
             }
             map
         };
-        let has_required_map: IndexMap<String, bool> = node_types
-            .iter()
-            .map(|(n, nt)| (n.clone(), nt.has_required_attrs()))
-            .collect();
 
         // --- Second pass: fill MarkType.excluded (must happen before NodeType fills,
         //     because resolve_mark_set clones Arc<MarkType> which would raise refcount > 1) ---
@@ -882,13 +872,22 @@ impl Schema {
         }
 
         // --- Third pass: fill NodeType fields (refcount = 1, Arc::get_mut safe) ---
+        // Step 3a: parse all content expressions while holding immutable ref to node_types
+        let content_matches: IndexMap<String, Arc<crate::model::content::ContentMatch>> = {
+            let mut map = IndexMap::new();
+            for (name, ns) in &spec.nodes {
+                let expr = ns.content.as_deref().unwrap_or("");
+                let cm = ContentMatch::parse(expr, &node_types, &groups_map)
+                    .map_err(|e| SchemaError(e.0))?;
+                map.insert(name.clone(), cm);
+            }
+            map
+        };
+        // Step 3b: fill NodeType fields using Arc::get_mut (immutable borrow of node_types now released)
         let mut linebreak_replacement: Option<Arc<NodeType>> = None;
         for (name, ns) in &spec.nodes {
+            let cm = content_matches[name].clone();
             let nt = Arc::get_mut(node_types.get_mut(name).unwrap()).unwrap();
-            let expr = ns.content.as_deref().unwrap_or("");
-            let cm =
-                ContentMatch::parse(expr, &is_inline_map, &groups_map, &has_required_map)
-                    .map_err(|e| SchemaError(e.0))?;
             nt.inline_content = cm.inline_content;
             nt.content_match = cm;
             nt.mark_set =
