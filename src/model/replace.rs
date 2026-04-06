@@ -2,7 +2,6 @@
 //!
 //! Phase 4.1 — Slice struct + 模块级私有辅助函数（remove_range、insert_into）。
 //! Phase 4.5+ 将在本文件续写 replace 算法。
-#![allow(dead_code)] // TODO: Phase 4.7 replace 算法完整后移除
 
 use std::sync::OnceLock;
 use serde_json::{Map, Value};
@@ -441,4 +440,72 @@ fn replace_three_way(
 
     add_range(Some(to), None, depth, &mut content);
     Ok(Fragment::from_array(&content))
+}
+
+/// Internal: recursive entry into the replace algorithm.
+///
+/// At each depth, decides between four strategies:
+/// 1. Same child on both sides and still above the open slice → recurse deeper
+/// 2. Empty slice → use replace_two_way to merge left/right
+/// 3. Flat case (no open sides, same depth) → simple content splice
+/// 4. Open slice → prepare and use replace_three_way
+///
+/// Corresponds to TS `replaceOuter($from, $to, slice, depth)` in replace.ts:130-144.
+fn replace_outer(
+    from: &ResolvedPos,
+    to: &ResolvedPos,
+    slice: &Slice,
+    depth: usize,
+) -> Result<Node, ReplaceError> {
+    let index = from.index(Some(depth as i32));
+    let node = from.node(Some(depth as i32));
+    if index == to.index(Some(depth as i32)) && depth < from.depth - slice.open_start {
+        let inner = replace_outer(from, to, slice, depth + 1)?;
+        return Ok(node.copy(Some(
+            node.content.replace_child(index, inner),
+        )));
+    } else if slice.content.size == 0 {
+        return close(node, replace_two_way(from, to, depth)?);
+    } else if slice.open_start == 0 && slice.open_end == 0
+        && from.depth == depth && to.depth == depth
+    {
+        // Simple, flat case
+        let parent = from.parent();
+        let content = &parent.content;
+        return close(
+            parent,
+            content
+                .cut(0, Some(from.parent_offset))
+                .append(&slice.content)
+                .append(&content.cut(to.parent_offset, None)),
+        );
+    } else {
+        let (start, end) = prepare_slice_for_replace(slice, from)
+            .map_err(|e| ReplaceError(e.0))?;
+        return close(node, replace_three_way(from, &start, &end, to, depth)?);
+    }
+}
+
+/// Replace a range of a document with a slice of new content.
+///
+/// Validates that the slice's open depths are consistent with the
+/// resolved positions, then delegates to the recursive `replace_outer`.
+///
+/// Corresponds to TS `replace($from, $to, slice)` in replace.ts:122-128.
+pub fn replace(
+    from: &ResolvedPos,
+    to: &ResolvedPos,
+    slice: &Slice,
+) -> Result<Node, ReplaceError> {
+    if slice.open_start > from.depth {
+        return Err(ReplaceError(
+            "Inserted content deeper than insertion position".to_string(),
+        ));
+    }
+    if from.depth - slice.open_start != to.depth - slice.open_end {
+        return Err(ReplaceError(
+            "Inconsistent open depths".to_string(),
+        ));
+    }
+    replace_outer(from, to, slice, 0)
 }
