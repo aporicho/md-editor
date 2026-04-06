@@ -5,6 +5,7 @@
 #![allow(dead_code)] // TODO: Phase 4.4 访问器完整后移除
 
 use crate::model::errors::RangeError;
+use crate::model::mark::Mark;
 use crate::model::node::Node;
 
 /// One level of the resolved-position path.
@@ -257,5 +258,76 @@ impl ResolvedPos {
             }
         }
         0
+    }
+
+    /// Get the marks at this position, factoring in the surrounding
+    /// marks' inclusive property.
+    pub fn marks(&self) -> Vec<Mark> {
+        let parent = &self.path[self.depth].node;
+        let index = self.path[self.depth].index;
+
+        // Empty parent: return empty
+        if parent.content.size == 0 {
+            return Vec::new();
+        }
+
+        // Inside a text node: return that text node's marks
+        if self.text_offset() > 0 {
+            return parent.maybe_child(index).map(|c| c.marks.clone()).unwrap_or_default();
+        }
+
+        // Get left/right neighbor nodes
+        let main_opt = if index > 0 { parent.maybe_child(index - 1) } else { None };
+        let other_opt = parent.maybe_child(index);
+
+        // If main is None, swap: main=other, other=None
+        let (main, other) = match (main_opt, other_opt) {
+            (Some(m), o) => (m, o),
+            (None, Some(o)) => (o, None),
+            (None, None) => return Vec::new(),
+        };
+
+        // Filter: drop non-inclusive marks that are not in `other`'s marks
+        let mut marks: Vec<Mark> = main.marks.clone();
+        let mut i = 0;
+        while i < marks.len() {
+            let mark = marks[i].clone();
+            let not_inclusive = !mark.mark_type.inclusive;
+            let not_in_other = other.map_or(true, |o| !mark.is_in_set(&o.marks));
+            if not_inclusive && not_in_other {
+                marks = mark.remove_from_set(&marks);
+            } else {
+                i += 1;
+            }
+        }
+        marks
+    }
+
+    /// Get the marks after the current position, except those that are
+    /// non-inclusive and not present at `end`. Returns `None` if this
+    /// position is at the end of its parent or not in an inline context.
+    pub fn marks_across(&self, end: &ResolvedPos) -> Option<Vec<Mark>> {
+        let parent = &self.path[self.depth].node;
+        let after = parent.maybe_child(self.path[self.depth].index)?;
+        if !after.is_inline() {
+            return None;
+        }
+        let next = {
+            let end_parent = &end.path[end.depth].node;
+            end_parent.maybe_child(end.path[end.depth].index)
+        };
+        let mut marks: Vec<Mark> = after.marks.clone();
+        let mut i = 0;
+        while i < marks.len() {
+            let mark = marks[i].clone();
+            let not_inclusive = !mark.mark_type.inclusive;
+            let not_in_next = next.map_or(true, |n| !mark.is_in_set(&n.marks));
+            if not_inclusive && not_in_next {
+                marks = mark.remove_from_set(&marks);
+            } else {
+                i += 1;
+            }
+        }
+        Some(marks)
     }
 }

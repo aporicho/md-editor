@@ -4,7 +4,7 @@
 // Phase 4.3/4.4 将在本文件补充访问器(node/start/end/before/after/marks)测试。
 
 use crate::model::resolved_pos::{PathFrame, ResolvedPos};
-use crate::model::test_builder::{blockquote, doc, p, t};
+use crate::model::test_builder::{blockquote, doc, em as em_mark, p, strong as strong_mark, t};
 
 #[test]
 fn path_frame_can_be_constructed() {
@@ -672,4 +672,95 @@ fn shared_depth_at_top_level_returns_zero() {
     // pos=4 depth=0,循环 depth>0 不执行,返回 0
     let rp4 = ResolvedPos::resolve(&d, 4).unwrap();
     assert_eq!(rp4.shared_depth(7), 0);
+}
+
+// --- Task 2: marks / marks_across 测试 ---
+//
+// 使用带 mark 的 doc:
+//   doc(p(em("ab"), "cd", strong("ef")))
+// p 的子节点:
+//   index 0: text("ab") with em
+//   index 1: text("cd") with no marks
+//   index 2: text("ef") with strong
+// p.content.size = 2+2+2 = 6
+// doc.size = 2+6 = 8
+
+fn mark_doc() -> crate::model::node::Node {
+    let em_ab = em_mark(&[t("ab")]);
+    let cd = t("cd");
+    let strong_ef = strong_mark(&[t("ef")]);
+    let mut children: Vec<crate::model::node::Node> = Vec::new();
+    children.extend(em_ab);
+    children.push(cd);
+    children.extend(strong_ef);
+    doc(&[p(&children)])
+}
+
+#[test]
+fn marks_returns_empty_for_empty_parent() {
+    // doc(p()):p 为空
+    let d = doc(&[p(&[])]);
+    // pos=1 进入空 p
+    let rp = ResolvedPos::resolve(&d, 1).unwrap();
+    assert!(rp.marks().is_empty());
+}
+
+#[test]
+fn marks_returns_text_marks_when_inside_text() {
+    // mark_doc: pos=2 在 text("ab") 内部(text_offset=1)
+    let d = mark_doc();
+    let rp = ResolvedPos::resolve(&d, 2).unwrap();
+    // text_offset=1 > 0 ⇒ 返回 parent.child(index=0).marks = [em]
+    let marks = rp.marks();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].mark_type.name, "em");
+}
+
+#[test]
+fn marks_returns_left_marks_at_text_boundary() {
+    // pos=3:在 em("ab") 和 "cd" 之间(p 的 index=1, text_offset=0)
+    // main=left(em("ab")), other=right("cd")
+    // em 默认 inclusive=true(MarkSpec::default()),所以不过滤
+    // 返回 main.marks = [em]
+    let d = mark_doc();
+    let rp = ResolvedPos::resolve(&d, 3).unwrap();
+    let marks = rp.marks();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].mark_type.name, "em");
+}
+
+#[test]
+fn marks_at_start_uses_right_node() {
+    // pos=1:在 p 开头(index=0,没有 left)
+    // main=None → swap:main=right(em("ab")),other=None
+    // 返回 main.marks = [em]
+    let d = mark_doc();
+    let rp = ResolvedPos::resolve(&d, 1).unwrap();
+    let marks = rp.marks();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].mark_type.name, "em");
+}
+
+#[test]
+fn marks_across_returns_none_outside_inline_context() {
+    // test_doc = doc(p("ab"), blk(p("cdef")))
+    // pos=4 在 doc 层面(p1 和 blk 之间),parent=doc,child(1)=blockquote(非 inline)
+    let d = test_doc();
+    let rp_from = ResolvedPos::resolve(&d, 4).unwrap();
+    let rp_to = ResolvedPos::resolve(&d, 5).unwrap();
+    assert!(rp_from.marks_across(&rp_to).is_none());
+}
+
+#[test]
+fn marks_across_returns_marks_of_node_after_self() {
+    // mark_doc: pos=1(index=0 of p, parent.child(0) = em("ab"))
+    // after = em("ab"),is_inline ⇒ marks = [em]
+    // next = end.parent.child(end.index()) = em("ab") (if end 也在同一位置)
+    // em 是 inclusive=true,不过滤
+    let d = mark_doc();
+    let rp_from = ResolvedPos::resolve(&d, 1).unwrap();
+    let rp_to = ResolvedPos::resolve(&d, 1).unwrap();
+    let marks = rp_from.marks_across(&rp_to).unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].mark_type.name, "em");
 }
