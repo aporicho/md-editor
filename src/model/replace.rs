@@ -336,6 +336,9 @@ fn prepare_slice_for_replace(
     slice: &Slice,
     along: &ResolvedPos,
 ) -> Result<(ResolvedPos, ResolvedPos), RangeError> {
+    debug_assert!(along.depth >= slice.open_start,
+        "prepare_slice_for_replace: along.depth ({}) < slice.open_start ({})",
+        along.depth, slice.open_start);
     let extra = along.depth - slice.open_start;
     let parent = along.node(Some(extra as i32));
     let mut node = parent.copy(Some(slice.content.clone()));
