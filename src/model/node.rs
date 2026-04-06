@@ -8,6 +8,8 @@ use crate::model::mark::Mark;
 use crate::model::fragment::Fragment;
 use crate::model::errors::RangeError;
 use crate::model::compare_deep::compare_deep;
+use crate::model::resolved_pos::ResolvedPos;
+use crate::model::replace::{self, Slice};
 
 /// This class represents a node in the tree that makes up a ProseMirror document.
 ///
@@ -571,22 +573,61 @@ impl Node {
         }
     }
 
-    /// NOTE: stub — requires Slice + ResolvedPos (Phase 4).
-    #[allow(unused)]
-    pub fn slice_stub(&self) -> ! {
-        todo!("Node::slice requires Slice + ResolvedPos — Phase 4")
+    /// Resolve the given position in the document, returning an object
+    /// with information about its context.
+    pub fn resolve(&self, pos: usize) -> Result<ResolvedPos, RangeError> {
+        ResolvedPos::resolve(self, pos)
     }
 
-    /// NOTE: stub — requires Slice + ResolvedPos (Phase 4).
-    #[allow(unused)]
-    pub fn replace_stub(&self) -> ! {
-        todo!("Node::replace requires Slice + ResolvedPos — Phase 4")
+    /// Cut out the part of the document between the given positions, and
+    /// return it as a `Slice` object.
+    pub fn slice(
+        &self,
+        from: usize,
+        to: Option<usize>,
+        include_parents: bool,
+    ) -> Result<Slice, RangeError> {
+        let to = to.unwrap_or(self.content.size);
+        if from == to {
+            return Ok(Slice::empty());
+        }
+        let resolved_from = self.resolve(from)?;
+        let resolved_to = self.resolve(to)?;
+        let depth = if include_parents {
+            0
+        } else {
+            resolved_from.shared_depth(to)
+        };
+        let start = resolved_from.start(Some(depth as i32));
+        let node = resolved_from.node(Some(depth as i32));
+        let content = node.content.cut(
+            resolved_from.pos - start,
+            Some(resolved_to.pos - start),
+        );
+        Ok(Slice::new(
+            content,
+            resolved_from.depth - depth,
+            resolved_to.depth - depth,
+        ))
     }
 
-    /// NOTE: stub — requires ResolvedPos (Phase 4).
-    #[allow(unused)]
-    pub fn resolve_stub(&self) -> ! {
-        todo!("Node::resolve requires ResolvedPos — Phase 4")
+    /// Replace the part of the document between the given positions with
+    /// the given slice. The slice must 'fit', meaning its open sides
+    /// must be able to connect to the surrounding content, and its
+    /// content nodes must be valid children for the node they are placed
+    /// into. If any of this is violated, an error of type
+    /// `ReplaceError` is returned.
+    pub fn replace(
+        &self,
+        from: usize,
+        to: usize,
+        slice: &Slice,
+    ) -> Result<Node, crate::model::errors::ReplaceError> {
+        let resolved_from = self.resolve(from)
+            .map_err(|e| crate::model::errors::ReplaceError(e.0))?;
+        let resolved_to = self.resolve(to)
+            .map_err(|e| crate::model::errors::ReplaceError(e.0))?;
+        replace::replace(&resolved_from, &resolved_to, slice)
     }
 }
 
