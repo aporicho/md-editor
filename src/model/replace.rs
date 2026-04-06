@@ -8,8 +8,10 @@ use std::sync::OnceLock;
 use serde_json::{Map, Value};
 
 use crate::model::errors::RangeError;
+use crate::model::errors::ReplaceError;
 use crate::model::fragment::Fragment;
 use crate::model::node::Node;
+use crate::model::resolved_pos::ResolvedPos;
 use crate::model::schema::Schema;
 
 static EMPTY_SLICE: OnceLock<Slice> = OnceLock::new();
@@ -228,4 +230,12 @@ fn insert_into(
     let child = content.maybe_child(index)?;
     let inner = insert_into(&child.content, dist - offset - 1, insert, Some(child))?;
     Some(content.replace_child(index, child.copy(Some(inner))))
+}
+
+/// Internal: validate content against the node's type, then copy with new content.
+///
+/// Corresponds to TS `close(node, content)` in replace.ts:182-185.
+fn close(node: &Node, content: Fragment) -> Result<Node, ReplaceError> {
+    node.node_type.check_content(&content).map_err(|e| ReplaceError(e.0))?;
+    Ok(node.copy(Some(content)))
 }
