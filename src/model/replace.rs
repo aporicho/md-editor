@@ -239,3 +239,21 @@ fn close(node: &Node, content: Fragment) -> Result<Node, ReplaceError> {
     node.node_type.check_content(&content).map_err(|e| ReplaceError(e.0))?;
     Ok(node.copy(Some(content)))
 }
+
+/// Internal: push `child` onto `target`, merging adjacent text nodes with
+/// identical markup.
+///
+/// Corresponds to TS `addNode(child, target)` in replace.ts:157-163.
+fn add_node(child: Node, target: &mut Vec<Node>) {
+    let last = target.len().wrapping_sub(1);
+    if !target.is_empty() && child.is_text() && child.same_markup(&target[last]) {
+        let merged_text = format!(
+            "{}{}",
+            target[last].text.as_deref().unwrap_or(""),
+            child.text.as_deref().unwrap_or("")
+        );
+        target[last] = target[last].with_text(merged_text);
+    } else {
+        target.push(child);
+    }
+}
