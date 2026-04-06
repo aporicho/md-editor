@@ -327,6 +327,8 @@ fn flatten_tagged(children: Vec<TChild>) -> (Vec<Node>, HashMap<String, usize>) 
         match child {
             TChild::Str(s) => {
                 let mut text = String::new();
+                // NOTE: This parser assumes ASCII-only input. Tag names and surrounding
+                // text must be pure ASCII. Multi-byte UTF-8 will produce incorrect results.
                 let bytes = s.as_bytes();
                 let mut i = 0;
                 while i < bytes.len() {
@@ -371,8 +373,7 @@ fn tag_make_node(type_name: &str, attrs: Option<&Attrs>, children: Vec<TChild>) 
     let content = Fragment::from_array(&nodes);
     let node = match attrs {
         Some(a) => {
-            let m: std::collections::HashMap<String, serde_json::Value> =
-                a.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let m = attrs_map(a);
             nt.create(Some(&m), Some(content), vec![]).expect("tag_make_node failed")
         }
         None => nt.create(None, Some(content), vec![]).expect("tag_make_node failed"),
