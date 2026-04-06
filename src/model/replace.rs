@@ -502,7 +502,9 @@ pub fn replace(
             "Inserted content deeper than insertion position".to_string(),
         ));
     }
-    if from.depth - slice.open_start != to.depth - slice.open_end {
+    if slice.open_end > to.depth
+        || from.depth - slice.open_start != to.depth - slice.open_end
+    {
         return Err(ReplaceError(
             "Inconsistent open depths".to_string(),
         ));
