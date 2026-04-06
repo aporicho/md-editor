@@ -293,7 +293,7 @@ impl ResolvedPos {
         while i < marks.len() {
             let mark = marks[i].clone();
             let not_inclusive = !mark.mark_type.inclusive;
-            let not_in_other = other.map_or(true, |o| !mark.is_in_set(&o.marks));
+            let not_in_other = other.is_none_or(|o| !mark.is_in_set(&o.marks));
             if not_inclusive && not_in_other {
                 marks = mark.remove_from_set(&marks);
             } else {
@@ -319,7 +319,7 @@ impl ResolvedPos {
         let mut d: i32 = self.depth as i32 - adjustment as i32;
         while d >= 0 {
             if other.pos <= self.end(Some(d))
-                && pred.map_or(true, |p| p(self.node(Some(d))))
+                && pred.is_none_or(|p| p(self.node(Some(d))))
             {
                 return Some(NodeRange::new(self.clone(), other.clone(), d as usize));
             }
@@ -346,7 +346,7 @@ impl ResolvedPos {
         while i < marks.len() {
             let mark = marks[i].clone();
             let not_inclusive = !mark.mark_type.inclusive;
-            let not_in_next = next.map_or(true, |n| !mark.is_in_set(&n.marks));
+            let not_in_next = next.is_none_or(|n| !mark.is_in_set(&n.marks));
             if not_inclusive && not_in_next {
                 marks = mark.remove_from_set(&marks);
             } else {

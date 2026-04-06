@@ -926,3 +926,52 @@ fn block_range_same_positions_adjusts_depth() {
     let nr = rp.block_range(Some(&rp.clone()), None).unwrap();
     assert_eq!(nr.depth, 1); // self.depth=2 - 1 = 1
 }
+
+// --- Task 4: integration tests ---
+
+#[test]
+fn pos_at_index_integration_multi_depth() {
+    use crate::model::test_builder::{blockquote, doc, p, t};
+    let d = doc(&[blockquote(&[
+        p(&[t("one")]),
+        blockquote(&[p(&[t("two")]), p(&[t("four")])]),
+    ])]);
+
+    let rp = ResolvedPos::resolve(&d, 8).unwrap();
+    assert!(rp.depth > 0);
+    // pos_at_index(0, 0) 总是 0
+    assert_eq!(rp.pos_at_index(0, Some(0)), 0);
+}
+
+#[test]
+fn block_range_and_marks_end_to_end() {
+    let d = test_doc();
+    let rp_from = ResolvedPos::resolve(&d, 1).unwrap();
+    let rp_to = ResolvedPos::resolve(&d, 10).unwrap();
+    let nr = rp_from.block_range(Some(&rp_to), None).unwrap();
+    assert_eq!(nr.depth, 0);
+    assert_eq!(nr.parent().node_type.name, "doc");
+    assert_eq!(nr.start(), 0);
+    assert_eq!(nr.end(), 12);
+    assert_eq!(nr.start_index(), 0);
+    assert_eq!(nr.end_index(), 2);
+
+    // marks_across 在 block 边界:pos=4 到 pos=5 是 doc 层面的 block 边界
+    let rp_block_from = ResolvedPos::resolve(&d, 4).unwrap();
+    let rp_block_to = ResolvedPos::resolve(&d, 5).unwrap();
+    assert!(rp_block_from.marks_across(&rp_block_to).is_none());
+}
+
+#[test]
+fn max_min_with_resolved_positions() {
+    let d = test_doc();
+    let positions = [0, 4, 7, 12];
+    let resolved: Vec<ResolvedPos> = positions
+        .iter()
+        .map(|&p| ResolvedPos::resolve(&d, p).unwrap())
+        .collect();
+    let max_pos = resolved.iter().fold(&resolved[0], |acc, rp| acc.max(rp));
+    let min_pos = resolved.iter().fold(&resolved[0], |acc, rp| acc.min(rp));
+    assert_eq!(max_pos.pos, 12);
+    assert_eq!(min_pos.pos, 0);
+}
