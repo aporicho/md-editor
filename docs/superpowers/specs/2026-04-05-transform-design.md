@@ -1,6 +1,6 @@
 # transform 模块设计文档
 
-**日期：** 2026-04-05
+**日期：** 2026-04-05（2026-04-06 更新）
 **状态：** 已确认，待实现
 **参考：** `reference/prosemirror-transform/src/`、`docs/superpowers/specs/rust-prosemirror-porting-guide.md`
 
@@ -20,12 +20,13 @@ TS 的 `abstract class Step` 靠继承扩展。Rust 用 trait 对象：
 
 ```rust
 pub trait Step: Any + Send + Sync {
-    fn apply(&self, doc: &Arc<Node>) -> StepResult;
-    fn invert(&self, doc: &Arc<Node>) -> Box<dyn Step>;
+    fn apply(&self, doc: &Node) -> StepResult;
+    fn invert(&self, doc: &Node) -> Box<dyn Step>;
     fn map(&self, mapping: &dyn Mappable) -> Option<Box<dyn Step>>;
     fn get_map(&self) -> StepMap;
     fn merge(&self, other: &dyn Step) -> Option<Box<dyn Step>>;
     fn to_json(&self) -> Value;
+    fn json_id(&self) -> &str;  // 决策 22
     fn as_any(&self) -> &dyn Any;  // 用于 merge 内部的类型判断
 }
 ```
@@ -117,17 +118,29 @@ bitflags::bitflags! {
 
 类型安全，不会意外传入非法值。
 
-### 决策 7：`Mapping.ownData` 被 Rust 所有权自然消除
+### 决策 7：`Mapping.slice()` 返回克隆子集，不用借用视图
 
-TS 里 `Mapping.slice()` 共享底层数组，修改前需要懒惰克隆，靠 `ownData` 标志追踪。Rust 的 `Vec` 天然独占数据，`appendMap` 直接 push，无需任何克隆检查。
+TS 里 `Mapping.slice()` 共享底层数组，修改前需要懒惰克隆，靠 `ownData` 标志追踪。
 
-`slice()` 返回轻量视图，不共享数据：
+Rust 里 `slice()` 直接 clone `maps[from..to]` 子集返回新 Mapping，调整 mirror 索引。StepMap 通常只有 1-3 个 MapRange，clone 开销可忽略。Rust `Vec` 天然独占数据，`append_map` 直接 push，无需克隆检查，TS 的 `ownData` 字段自然消除。
+
 ```rust
-pub struct MappingSlice<'a> {
-    maps: &'a [StepMap],
-    mirror: Option<&'a [usize]>,
-    from: usize,
-    to: usize,
+pub struct Mapping {
+    maps: Vec<StepMap>,
+    mirror: Option<Vec<(usize, usize)>>,
+}
+
+impl Mapping {
+    pub fn slice(&self, from: usize, to: usize) -> Mapping {
+        let maps = self.maps[from..to].to_vec();
+        let mirror = self.mirror.as_ref().map(|m| {
+            m.iter()
+                .filter(|(a, b)| *a >= from && *a < to && *b >= from && *b < to)
+                .map(|(a, b)| (a - from, b - from))
+                .collect()
+        });
+        Mapping { maps, mirror }
+    }
 }
 ```
 
@@ -137,10 +150,11 @@ TS 里失败直接 throw，方法链不中断。Rust 里用毒化模式：
 
 ```rust
 pub struct Transform {
-    pub doc: Arc<Node>,
+    pub doc: Node,
     pub steps: Vec<Box<dyn Step>>,
-    pub docs: Vec<Arc<Node>>,
+    pub docs: Vec<Node>,
     pub mapping: Mapping,
+    schema: Arc<Schema>,         // 决策 25
     error: Option<TransformError>,  // 毒化字段
 }
 
@@ -164,7 +178,7 @@ impl Transform {
 
 链式调用完全保留，最后统一检查错误。
 
-### 决策 9：`findWrapping` 返回具名 struct
+### 决策 9：`findWrapping` 返回具名 struct，内部通过 Schema 转换
 
 TS 返回 `{type: NodeType, attrs: Attrs | null}[] | null`。Rust 里用具名 struct：
 
@@ -174,6 +188,18 @@ pub struct WrapperSpec {
     pub attrs: Option<Attrs>,
 }
 // 返回 Option<Vec<WrapperSpec>>
+```
+
+model 的 `ContentMatch::find_wrapping(&str)` 返回 `Vec<String>`（类型名），transform 通过 `Schema.nodes` 查找转换为 `Arc<NodeType>`。transform 级别的 `findWrapping` 函数签名为：
+
+```rust
+pub fn find_wrapping(
+    range: &NodeRange,
+    node_type: &Arc<NodeType>,
+    attrs: Option<Attrs>,
+    inner_range: Option<&NodeRange>,
+    schema: &Schema,
+) -> Option<Vec<WrapperSpec>>
 ```
 
 ### 决策 10：`Transform.changedRange()` 返回具名 struct
@@ -209,7 +235,7 @@ for (start, end, mark) in to_remove {
 TS 里用 try/catch 捕获 `ReplaceError`，其他异常继续抛出。Rust 里 `replace` 返回 `Result`，直接 match，不会误吞其他错误：
 
 ```rust
-pub fn from_replace(doc: &Arc<Node>, from: usize, to: usize, slice: Slice) -> Self {
+pub fn from_replace(doc: &Node, from: usize, to: usize, slice: Slice) -> Self {
     match doc.replace(from, to, slice) {
         Ok(new_doc) => StepResult::ok(new_doc),
         Err(e) => StepResult::fail(e.to_string()),
@@ -224,6 +250,8 @@ TS 里 `_map(pos, assoc, simple: boolean)` 用 bool 控制返回 `number` 或 `M
 - `map(&self, pos: usize, assoc: i8) -> usize`
 - `map_result(&self, pos: usize, assoc: i8) -> MapResult`
 
+内部共享 `_map_impl` 返回 `MapResult`，`map()` 只取 `.pos`。
+
 ### 决策 14：`Fittable` 可选字段用 `Option`
 
 TS 里 `Fittable` 接口的 `inject?` 和 `wrap?` 是可选字段。Rust 里直接对应：
@@ -232,7 +260,7 @@ TS 里 `Fittable` 接口的 `inject?` 和 `wrap?` 是可选字段。Rust 里直�
 struct Fittable {
     slice_depth: usize,
     frontier_depth: usize,
-    parent: Option<Arc<Node>>,
+    parent: Option<Node>,
     inject: Option<Fragment>,
     wrap: Option<Vec<Arc<NodeType>>>,
 }
@@ -275,7 +303,7 @@ TS 里 `mirror?: number[]` 将镜像对 `(n, m)` 压入平坦数组，靠"两个
 mirror: Option<Vec<(usize, usize)>>,
 ```
 
-语义明确，`getMirror`/`setMirror` 的查找逻辑随之简化。
+语义明确，`get_mirror`/`set_mirror` 的查找逻辑随之简化。
 
 ### 决策 18：`changedRange()` 用 `Option` 累积，不用哨兵值
 
@@ -302,15 +330,15 @@ TS 里 `attrs: Attrs | null | ((oldNode) => Attrs)` 靠运行时判断传入类�
 
 ```rust
 pub trait IntoAttrs {
-    fn into_attrs(self, node: &Arc<Node>) -> Option<Attrs>;
+    fn into_attrs(self, node: &Node) -> Option<Attrs>;
 }
 
 impl IntoAttrs for Option<Attrs> {
-    fn into_attrs(self, _node: &Arc<Node>) -> Option<Attrs> { self }
+    fn into_attrs(self, _node: &Node) -> Option<Attrs> { self }
 }
 
-impl<F: Fn(&Arc<Node>) -> Attrs> IntoAttrs for F {
-    fn into_attrs(self, node: &Arc<Node>) -> Option<Attrs> { Some(self(node)) }
+impl<F: Fn(&Node) -> Attrs> IntoAttrs for F {
+    fn into_attrs(self, node: &Node) -> Option<Attrs> { Some(self(node)) }
 }
 ```
 
@@ -347,11 +375,7 @@ TS 里注册时把 id 存在原型上，`to_json` 里直接用 `this.jsonID`，�
 ```rust
 pub trait Step: Any + Send + Sync {
     fn json_id(&self) -> &str;  // 唯一 id 来源
-    fn to_json(&self) -> Value {
-        let mut obj = json!({"stepType": self.json_id()});
-        // 各子类补充自己的字段
-        obj
-    }
+    // to_json 内部使用 self.json_id()
     // ...
 }
 ```
@@ -390,6 +414,56 @@ impl From<Arc<MarkType>> for MarkFilter {
 
 调用方直接传 `mark` 或 `mark_type`，类型推断自动转换，和 TS 体验一致。
 
+### 决策 25：Transform 持有 Schema 引用，独立函数显式传参
+
+**问题：** TS 中通过 `node.type.schema` 访问 Schema，但 Rust model 中 NodeType 不持有 Schema 引用（避免循环 Arc）。Transform 和部分独立函数需要 Schema 来访问 `linebreak_replacement`、`Schema::text()` 等。
+
+**方案：**
+
+```rust
+pub struct Transform {
+    pub doc: Node,
+    pub schema: Arc<Schema>,   // 构造时传入
+    // ...
+}
+
+impl Transform {
+    pub fn new(doc: Node, schema: Arc<Schema>) -> Self { ... }
+}
+```
+
+独立函数中，只有访问 `linebreak_replacement` 的需要 `&Schema`：
+- `can_join(doc, pos, schema)` — 内部调用 `canAppendWithSubstitutedLinebreaks`
+- `join_point(doc, pos, dir, schema)` — 同上
+
+不需要 Schema 的独立函数（签名不变）：
+- `can_split(doc, pos, depth, types_after)`
+- `insert_point(doc, pos, node_type)`
+- `drop_point(doc, pos, slice)`
+- `lift_target(range)`
+
+transform 级别的 `find_wrapping` 需要 `&Schema` 将类型名转换为 `Arc<NodeType>`。
+
+### 决策 26：`removeNodeMark` 参数用 `NodeMarkTarget` 枚举
+
+TS 里 `removeNodeMark(pos, mark: Mark | MarkType)` 是双类型参数。Rust 用枚举 + From trait：
+
+```rust
+pub enum NodeMarkTarget {
+    Mark(Mark),
+    Type(Arc<MarkType>),
+}
+
+impl From<Mark> for NodeMarkTarget {
+    fn from(mark: Mark) -> Self { NodeMarkTarget::Mark(mark) }
+}
+impl From<Arc<MarkType>> for NodeMarkTarget {
+    fn from(t: Arc<MarkType>) -> Self { NodeMarkTarget::Type(t) }
+}
+```
+
+调用方直接传 `mark` 或 `mark_type`，与 `MarkFilter` 风格一致。
+
 ### 说明：Arena 分配和混合 Step 方案有意不采用
 
 理论上 Arena 分配可以消除 `Arc<Node>` 的引用计数开销，混合 Step 方案（内置枚举+自定义 trait）可以消除动态分发开销。但对于 Markdown 编辑器：
@@ -414,7 +488,7 @@ src/transform/
   replace_step.rs  ← ReplaceStep、ReplaceAroundStep
   mark_step.rs     ← AddMarkStep、RemoveMarkStep、AddNodeMarkStep、RemoveNodeMarkStep
   attr_step.rs     ← AttrStep、DocAttrStep
-  replace.rs       ← replaceStep、replaceRange、replaceRangeWith、deleteRange
+  replace.rs       ← replaceStep、replaceRange、replaceRangeWith、deleteRange（含 Fitter 类）
   mark.rs          ← addMark、removeMark、clearIncompatible
   structure.rs     ← lift、wrap、split、join、setBlockType、setNodeMarkup、
                      liftTarget、findWrapping、canJoin、canSplit、
@@ -429,12 +503,13 @@ src/transform/
 
 ```rust
 pub trait Step: Any + Send + Sync {
-    fn apply(&self, doc: &Arc<Node>) -> StepResult;
-    fn invert(&self, doc: &Arc<Node>) -> Box<dyn Step>;
+    fn apply(&self, doc: &Node) -> StepResult;
+    fn invert(&self, doc: &Node) -> Box<dyn Step>;
     fn map(&self, mapping: &dyn Mappable) -> Option<Box<dyn Step>>;
     fn get_map(&self) -> StepMap { StepMap::empty() }
     fn merge(&self, _other: &dyn Step) -> Option<Box<dyn Step>> { None }
     fn to_json(&self) -> Value;
+    fn json_id(&self) -> &str;
     fn from_json(schema: &Schema, json: &Value) -> Result<Box<dyn Step>, RangeError>
         where Self: Sized;
     fn as_any(&self) -> &dyn Any;
@@ -445,14 +520,14 @@ pub trait Step: Any + Send + Sync {
 
 ```rust
 pub struct StepResult {
-    pub doc: Option<Arc<Node>>,
+    pub doc: Option<Node>,
     pub failed: Option<String>,
 }
 
 impl StepResult {
-    pub fn ok(doc: Arc<Node>) -> Self { ... }
+    pub fn ok(doc: Node) -> Self { ... }
     pub fn fail(message: impl Into<String>) -> Self { ... }
-    pub fn from_replace(doc: &Arc<Node>, from: usize, to: usize, slice: Slice) -> Self { ... }
+    pub fn from_replace(doc: &Node, from: usize, to: usize, slice: Slice) -> Self { ... }
     pub fn is_ok(&self) -> bool { self.failed.is_none() }
 }
 ```
@@ -502,9 +577,10 @@ pub trait Mappable {
 
 ```rust
 pub struct Transform {
-    pub doc: Arc<Node>,
+    pub doc: Node,
+    pub schema: Arc<Schema>,
     pub steps: Vec<Box<dyn Step>>,
-    pub docs: Vec<Arc<Node>>,
+    pub docs: Vec<Node>,
     pub mapping: Mapping,
     error: Option<TransformError>,
 }
@@ -528,7 +604,8 @@ impl fmt::Display for TransformError { ... }
 |---|---|
 | `test-trans.ts` | `src/transform/tests_trans.rs` |
 | `test-mapping.ts` | `src/transform/tests_mapping.rs` |
-| `test-mark.ts` | `src/transform/tests_mark.rs` |
+| `test-step.ts` | `src/transform/tests_step.rs` |
+| `test-replace_step.ts` | `src/transform/tests_replace_step.rs` |
 | `test-structure.ts` | `src/transform/tests_structure.rs` |
 
 ---
@@ -538,3 +615,34 @@ impl fmt::Display for TransformError { ... }
 ```toml
 bitflags = "2"
 ```
+
+---
+
+## 与 model 模块的接口说明
+
+以下 model API 被 transform 直接调用，实现时需确认签名一致：
+
+| model API | 调用场景 |
+|---|---|
+| `Node::replace(from, to, slice)` | StepResult::from_replace |
+| `Node::slice(from, to)` | ReplaceStep::invert |
+| `Node::resolve(pos)` | replace.rs Fitter、structure.rs 各函数 |
+| `Node::node_at(pos)` | AttrStep、mark_step、removeNodeMark |
+| `Node::nodes_between(from, to, f)` | addMark、removeMark、setBlockType |
+| `Node::content_match_at(index)` | Fitter、structure.rs |
+| `Node::can_replace(from, to, ...)` | structure.rs 各函数 |
+| `Node::can_replace_with(from, to, ...)` | canSplit、replaceRange |
+| `Node::has_markup(type, attrs)` | setBlockType |
+| `ContentMatch::match_type(name)` | clearIncompatible、Fitter |
+| `ContentMatch::match_fragment(frag, start, end)` | wrap、Fitter |
+| `ContentMatch::fill_before(after, to_end, start_index)` | Fitter、clearIncompatible |
+| `ContentMatch::find_wrapping(target)` | findWrapping、dropPoint |
+| `ContentMatch::valid_end` | clearIncompatible、findWrappingInside |
+| `ContentMatch::compatible(other)` | Fitter::findFittable |
+| `Schema::text(text, marks)` | clearIncompatible |
+| `Schema::linebreak_replacement` | join、setBlockType |
+| `Fragment::from_array(nodes)` | mark_step mapFragment |
+| `Slice::insert_at(pos, content)` | ReplaceAroundStep::apply |
+| `Slice::remove_between(from, to)` | ReplaceAroundStep::invert |
+| `Mark::add_to_set(set)` | AddMarkStep |
+| `Mark::remove_from_set(set)` | RemoveMarkStep |
