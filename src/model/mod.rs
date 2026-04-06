@@ -26,3 +26,5 @@ mod tests_content;
 mod tests_slice;
 #[cfg(test)]
 mod tests_resolve;
+#[cfg(test)]
+mod tests_replace;
