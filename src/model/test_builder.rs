@@ -3,6 +3,7 @@
 // 测试基础设施 — 仅在 #[cfg(test)] 下可见。
 // 提供统一的测试 Schema 和节点快速构建函数。
 //
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use indexmap::indexmap;
 use serde_json::json;
@@ -277,6 +278,134 @@ fn apply_mark(
 }
 
 // ---------------------------------------------------------------------------
+// Tagged node builders — 用于 replace 测试中的位置标记
+// ---------------------------------------------------------------------------
+
+/// 带位置标记的节点。tag 记录 <name> 标记对应的绝对文档位置。
+pub struct TaggedNode {
+    pub node: Node,
+    pub tag: HashMap<String, usize>,
+}
+
+/// 可传入 tagged builder 的子元素。
+pub enum TChild {
+    /// 可能含 <tag> 标记的文本字符串。标记被提取，纯文本构建为文本节点。
+    Str(String),
+    /// 已构建的普通节点（无标记）。
+    N(Node),
+    /// 带标记的子节点（来自另一个 tagged builder）。
+    Tagged(TaggedNode),
+}
+
+impl From<&str> for TChild {
+    fn from(s: &str) -> Self { TChild::Str(s.to_string()) }
+}
+
+impl From<Node> for TChild {
+    fn from(n: Node) -> Self { TChild::N(n) }
+}
+
+impl From<TaggedNode> for TChild {
+    fn from(t: TaggedNode) -> Self { TChild::Tagged(t) }
+}
+
+/// 核心算法：处理 TChild 列表，提取标记位置，构建节点列表。
+///
+/// 对应 TS prosemirror-test-builder 的 flatten() 函数。
+/// 位置规则：
+/// - 文本字符每个 +1
+/// - <tag> 标记记录当前位置但不占空间
+/// - 块节点子标记继承时 +1（开标签偏移）
+/// - 文本/内联节点子标记继承时 +0
+fn flatten_tagged(children: Vec<TChild>) -> (Vec<Node>, HashMap<String, usize>) {
+    let schema = test_schema();
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut tags: HashMap<String, usize> = HashMap::new();
+    let mut pos = 0usize;
+
+    for child in children {
+        match child {
+            TChild::Str(s) => {
+                let mut text = String::new();
+                let bytes = s.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'<' {
+                        if let Some(end) = s[i + 1..].find('>') {
+                            let tag_name = &s[i + 1..i + 1 + end];
+                            tags.insert(tag_name.to_string(), pos);
+                            i += end + 2; // skip past '>'
+                            continue;
+                        }
+                    }
+                    text.push(bytes[i] as char);
+                    pos += 1;
+                    i += 1;
+                }
+                if !text.is_empty() {
+                    nodes.push(schema.text(text, vec![]));
+                }
+            }
+            TChild::N(n) => {
+                pos += n.node_size();
+                nodes.push(n);
+            }
+            TChild::Tagged(t) => {
+                let offset = if t.node.is_text() { 0 } else { 1 } + pos;
+                for (name, tag_pos) in &t.tag {
+                    tags.insert(name.clone(), tag_pos + offset);
+                }
+                pos += t.node.node_size();
+                nodes.push(t.node);
+            }
+        }
+    }
+
+    (nodes, tags)
+}
+
+fn tag_make_node(type_name: &str, attrs: Option<&Attrs>, children: Vec<TChild>) -> TaggedNode {
+    let schema = test_schema();
+    let (nodes, tags) = flatten_tagged(children);
+    let nt = schema.nodes[type_name].clone();
+    let content = Fragment::from_array(&nodes);
+    let node = match attrs {
+        Some(a) => {
+            let m: std::collections::HashMap<String, serde_json::Value> =
+                a.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            nt.create(Some(&m), Some(content), vec![]).expect("tag_make_node failed")
+        }
+        None => nt.create(None, Some(content), vec![]).expect("tag_make_node failed"),
+    };
+    TaggedNode { node, tag: tags }
+}
+
+pub fn tag_doc(children: Vec<TChild>) -> TaggedNode {
+    tag_make_node("doc", None, children)
+}
+
+pub fn tag_p(children: Vec<TChild>) -> TaggedNode {
+    tag_make_node("paragraph", None, children)
+}
+
+pub fn tag_h1(children: Vec<TChild>) -> TaggedNode {
+    let attrs: Attrs = Arc::new([("level".to_string(), serde_json::json!(1))].into_iter().collect());
+    tag_make_node("heading", Some(&attrs), children)
+}
+
+pub fn tag_blockquote(children: Vec<TChild>) -> TaggedNode {
+    tag_make_node("blockquote", None, children)
+}
+
+pub fn tag_ul(children: Vec<TChild>) -> TaggedNode {
+    tag_make_node("bullet_list", None, children)
+}
+
+pub fn tag_li(children: Vec<TChild>) -> TaggedNode {
+    tag_make_node("list_item", None, children)
+}
+
+// ---------------------------------------------------------------------------
 // Smoke tests
 // ---------------------------------------------------------------------------
 
@@ -413,5 +542,54 @@ mod tests {
             "X".to_string()
         });
         assert_eq!(result, "helloX");
+    }
+
+    #[test]
+    fn tag_system_basic_positions() {
+        let d = tag_doc(vec![
+            tag_p(vec!["on<a>e".into()]).into(),
+            tag_p(vec!["t<b>wo".into()]).into(),
+        ]);
+        assert_eq!(d.tag["a"], 3);
+        assert_eq!(d.tag["b"], 7);
+    }
+
+    #[test]
+    fn tag_system_same_position() {
+        let d = tag_doc(vec![
+            tag_p(vec!["on<a><b>e".into()]).into(),
+        ]);
+        assert_eq!(d.tag["a"], 3);
+        assert_eq!(d.tag["b"], 3);
+    }
+
+    #[test]
+    fn tag_system_bare_tag_in_block() {
+        let d = tag_doc(vec![
+            tag_blockquote(vec![
+                TChild::N(p(&[t("a")])),
+                "<b>".into(),
+            ]).into(),
+        ]);
+        // <b> is inside blockquote after p("a") closes:
+        // doc[0] bq-open[1] p-open[2] "a"[3] p-close[4] bq-close[5]
+        // position 4 = inside blockquote after all content
+        assert_eq!(d.tag["b"], 4);
+    }
+
+    #[test]
+    fn tag_system_nested_blockquote() {
+        let d = tag_doc(vec![
+            tag_blockquote(vec![
+                tag_blockquote(vec![
+                    tag_p(vec!["on<a>e".into()]).into(),
+                    TChild::N(p(&[t("two")])),
+                    "<b>".into(),
+                    TChild::N(p(&[t("three")])),
+                ]).into(),
+            ]).into(),
+        ]);
+        assert_eq!(d.tag["a"], 5);
+        assert_eq!(d.tag["b"], 12);
     }
 }
