@@ -355,3 +355,28 @@ fn prepare_slice_for_replace(
     )?;
     Ok((start, end))
 }
+
+/// Internal: build a new fragment by merging content from `$from` to `$to`
+/// at the given `depth`, recursing into matching open nodes.
+///
+/// Used when there is no slice content to insert — just joining the
+/// remaining content on both sides.
+///
+/// Corresponds to TS `replaceTwoWay($from, $to, depth)` in replace.ts:207-216.
+fn replace_two_way(
+    from: &ResolvedPos,
+    to: &ResolvedPos,
+    depth: usize,
+) -> Result<Fragment, ReplaceError> {
+    let mut content: Vec<Node> = Vec::new();
+    add_range(None, Some(from), depth, &mut content);
+    if from.depth > depth {
+        let type_node = joinable(from, to, depth + 1)?;
+        add_node(
+            close(&type_node, replace_two_way(from, to, depth + 1)?)?,
+            &mut content,
+        );
+    }
+    add_range(Some(to), None, depth, &mut content);
+    Ok(Fragment::from_array(&content))
+}
