@@ -257,3 +257,45 @@ fn add_node(child: Node, target: &mut Vec<Node>) {
         target.push(child);
     }
 }
+
+/// Internal: collect child nodes from a resolved-position range into `target`.
+///
+/// Collects children of the node at `depth` between the positions indicated
+/// by `start` and `end`. Handles partial text nodes at boundaries via
+/// `node_after` / `node_before`.
+///
+/// Corresponds to TS `addRange($start, $end, depth, target)` in replace.ts:165-180.
+fn add_range(
+    start: Option<&ResolvedPos>,
+    end: Option<&ResolvedPos>,
+    depth: usize,
+    target: &mut Vec<Node>,
+) {
+    let node = end.or(start).expect("add_range: at least one of start/end must be Some")
+        .node(Some(depth as i32));
+    let mut start_index = 0usize;
+    let end_index = match end {
+        Some(e) => e.index(Some(depth as i32)),
+        None => node.child_count(),
+    };
+    if let Some(s) = start {
+        start_index = s.index(Some(depth as i32));
+        if s.depth > depth {
+            start_index += 1;
+        } else if s.text_offset() > 0 {
+            add_node(s.node_after().expect("add_range: node_after must exist when text_offset > 0"), target);
+            start_index += 1;
+        }
+    }
+    for i in start_index..end_index {
+        add_node(
+            node.child(i).expect("add_range: index within child_count").clone(),
+            target,
+        );
+    }
+    if let Some(e) = end {
+        if e.depth == depth && e.text_offset() > 0 {
+            add_node(e.node_before().expect("add_range: node_before must exist when text_offset > 0"), target);
+        }
+    }
+}
