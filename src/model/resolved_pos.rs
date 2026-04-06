@@ -303,6 +303,31 @@ impl ResolvedPos {
         marks
     }
 
+    /// Returns a range based on where this position and the given
+    /// position diverge around block content.
+    pub fn block_range(
+        &self,
+        other: Option<&ResolvedPos>,
+        pred: Option<&dyn Fn(&Node) -> bool>,
+    ) -> Option<NodeRange> {
+        let other = other.unwrap_or(self);
+        if other.pos < self.pos {
+            return other.block_range(Some(self), pred);
+        }
+        let parent = &self.path[self.depth].node;
+        let adjustment: usize = if parent.inline_content() || self.pos == other.pos { 1 } else { 0 };
+        let mut d: i32 = self.depth as i32 - adjustment as i32;
+        while d >= 0 {
+            if other.pos <= self.end(Some(d))
+                && pred.map_or(true, |p| p(self.node(Some(d))))
+            {
+                return Some(NodeRange::new(self.clone(), other.clone(), d as usize));
+            }
+            d -= 1;
+        }
+        None
+    }
+
     /// Get the marks after the current position, except those that are
     /// non-inclusive and not present at `end`. Returns `None` if this
     /// position is at the end of its parent or not in an inline context.
@@ -329,5 +354,51 @@ impl ResolvedPos {
             }
         }
         Some(marks)
+    }
+}
+
+/// Represents a flat range of content, i.e. one that starts and
+/// ends in the same node.
+#[derive(Clone)]
+pub struct NodeRange {
+    /// A resolved position along the start of the content.
+    pub from: ResolvedPos,
+    /// A resolved position along the end of the content.
+    pub to: ResolvedPos,
+    /// The depth of the node that this range points into.
+    pub depth: usize,
+}
+
+impl NodeRange {
+    /// Construct a node range.
+    pub fn new(from: ResolvedPos, to: ResolvedPos, depth: usize) -> Self {
+        NodeRange { from, to, depth }
+    }
+
+    /// The position at the start of the range.
+    pub fn start(&self) -> usize {
+        self.from.before(Some((self.depth + 1) as i32))
+            .expect("NodeRange::start: before() should not fail for a valid depth")
+    }
+
+    /// The position at the end of the range.
+    pub fn end(&self) -> usize {
+        self.to.after(Some((self.depth + 1) as i32))
+            .expect("NodeRange::end: after() should not fail for a valid depth")
+    }
+
+    /// The parent node that the range points into.
+    pub fn parent(&self) -> &Node {
+        self.from.node(Some(self.depth as i32))
+    }
+
+    /// The start index of the range in the parent node.
+    pub fn start_index(&self) -> usize {
+        self.from.index(Some(self.depth as i32))
+    }
+
+    /// The end index of the range in the parent node.
+    pub fn end_index(&self) -> usize {
+        self.to.index_after(Some(self.depth as i32))
     }
 }

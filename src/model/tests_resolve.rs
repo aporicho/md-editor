@@ -853,3 +853,76 @@ fn marks_preserves_non_inclusive_marks_when_in_both_sides() {
     assert_eq!(marks.len(), 1, "non-inclusive mark should be preserved when in both neighbors");
     assert_eq!(marks[0].mark_type.name, "noninc");
 }
+
+// --- Task 3: NodeRange + block_range 测试 ---
+
+use crate::model::resolved_pos::NodeRange;
+
+#[test]
+fn node_range_struct_and_accessors() {
+    let d = test_doc();
+    let rp_from = ResolvedPos::resolve(&d, 1).unwrap(); // 在 p1 内
+    let rp_to = ResolvedPos::resolve(&d, 3).unwrap();   // 在 p1 内
+    // depth=0 意味着 range 的 parent 是 doc
+    let nr = NodeRange::new(rp_from.clone(), rp_to.clone(), 0);
+    assert_eq!(nr.depth, 0);
+    // start = $from.before(1) = path[0].start_pos = 0
+    assert_eq!(nr.start(), 0);
+    // end = $to.after(1) = path[0].start_pos + path[1].node.node_size() = 0 + 4 = 4
+    assert_eq!(nr.end(), 4);
+    // parent = $from.node(0) = doc
+    assert_eq!(nr.parent().node_type.name, "doc");
+    // start_index = $from.index(0) = 0
+    assert_eq!(nr.start_index(), 0);
+    // end_index = $to.index_after(0) = index(0) + bump
+    // $to.depth=1, depth=0 != self.depth ⇒ bump=1 ⇒ index(0)+1 = 0+1 = 1
+    assert_eq!(nr.end_index(), 1);
+}
+
+#[test]
+fn block_range_self_returns_parent_block() {
+    // pos=7 depth=2,parent=p2 inline_content=true ⇒ adjustment=1, d=1
+    // self.end(1)=11 >= other.pos=7 ⇒ 返回 NodeRange(self, self, 1)
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let nr = rp.block_range(None, None).unwrap();
+    assert_eq!(nr.depth, 1);
+    assert_eq!(nr.parent().node_type.name, "blockquote");
+}
+
+#[test]
+fn block_range_swaps_when_other_before_self() {
+    let d = test_doc();
+    let rp_late = ResolvedPos::resolve(&d, 7).unwrap();
+    let rp_early = ResolvedPos::resolve(&d, 1).unwrap();
+    // other=early < self=late ⇒ 递归:early.block_range(late)
+    let nr = rp_late.block_range(Some(&rp_early), None).unwrap();
+    assert_eq!(nr.depth, 0);
+    assert_eq!(nr.parent().node_type.name, "doc");
+}
+
+#[test]
+fn block_range_with_pred_filters_nodes() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let pred = |node: &crate::model::node::Node| node.node_type.name == "blockquote";
+    let nr = rp.block_range(None, Some(&pred)).unwrap();
+    assert_eq!(nr.depth, 1);
+    assert_eq!(nr.parent().node_type.name, "blockquote");
+}
+
+#[test]
+fn block_range_returns_none_if_pred_never_matches() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let pred = |node: &crate::model::node::Node| node.node_type.name == "nonexistent";
+    assert!(rp.block_range(None, Some(&pred)).is_none());
+}
+
+#[test]
+fn block_range_same_positions_adjusts_depth() {
+    let d = test_doc();
+    let rp = ResolvedPos::resolve(&d, 7).unwrap();
+    let nr = rp.block_range(Some(&rp.clone()), None).unwrap();
+    assert_eq!(nr.depth, 1); // self.depth=2 - 1 = 1
+}
