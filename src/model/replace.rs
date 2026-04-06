@@ -326,3 +326,29 @@ fn joinable(
     check_join(&node, after.node(Some(depth as i32)))?;
     Ok(node)
 }
+
+/// Internal: wrap the slice content in ancestor copies so that it can be
+/// resolved into `ResolvedPos` pairs (`start`, `end`) for the replace
+/// algorithm.
+///
+/// Corresponds to TS `prepareSliceForReplace(slice, $along)` in replace.ts:218-225.
+fn prepare_slice_for_replace(
+    slice: &Slice,
+    along: &ResolvedPos,
+) -> Result<(ResolvedPos, ResolvedPos), RangeError> {
+    let extra = along.depth - slice.open_start;
+    let parent = along.node(Some(extra as i32));
+    let mut node = parent.copy(Some(slice.content.clone()));
+    for i in (0..extra).rev() {
+        node = along.node(Some(i as i32)).copy(Some(Fragment::from_node(node)));
+    }
+    let start = ResolvedPos::resolve_no_cache(
+        &node,
+        slice.open_start + extra,
+    )?;
+    let end = ResolvedPos::resolve_no_cache(
+        &node,
+        node.content.size - slice.open_end - extra,
+    )?;
+    Ok((start, end))
+}
