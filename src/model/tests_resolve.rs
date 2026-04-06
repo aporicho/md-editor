@@ -764,3 +764,92 @@ fn marks_across_returns_marks_of_node_after_self() {
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0].mark_type.name, "em");
 }
+
+#[test]
+fn marks_filters_non_inclusive_marks_at_boundary() {
+    // 构造带 inclusive=false mark 的 schema
+    use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+    use crate::model::fragment::Fragment;
+    use indexmap::indexmap;
+
+    let schema = Schema::new(SchemaSpec {
+        nodes: indexmap! {
+            "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+            "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+            "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+        },
+        marks: indexmap! {
+            "noninc".to_string() => MarkSpec {
+                inclusive: false,
+                ..MarkSpec::default()
+            },
+        },
+        top_node: None,
+    }).unwrap();
+
+    // 构造 doc(p(noninc("ab"), "cd"))
+    // noninc("ab") = text("ab") with noninc mark
+    // "cd" = text("cd") without marks
+    let noninc_mark = schema.marks["noninc"]
+        .create(&schema.marks["noninc"], None)
+        .unwrap();
+    let text_ab = schema.text("ab".to_string(), vec![noninc_mark]);
+    let text_cd = schema.text("cd".to_string(), vec![]);
+    let para = schema.nodes["paragraph"]
+        .create(None, Some(Fragment::from_array(&[text_ab, text_cd])), vec![])
+        .unwrap();
+    let d = schema.nodes["doc"]
+        .create(None, Some(Fragment::from_node(para)), vec![])
+        .unwrap();
+
+    // pos=3:在 noninc("ab") 和 "cd" 之间
+    // main=left=noninc("ab"), other=right="cd"
+    // noninc.inclusive=false, noninc 不在 right marks 中 => 被过滤
+    // 应返回空 marks
+    let rp = ResolvedPos::resolve(&d, 3).unwrap();
+    let marks = rp.marks();
+    assert!(marks.is_empty(), "non-inclusive mark should be filtered when not in right neighbor");
+}
+
+#[test]
+fn marks_preserves_non_inclusive_marks_when_in_both_sides() {
+    use crate::model::schema::{Schema, SchemaSpec, NodeSpec, MarkSpec};
+    use crate::model::fragment::Fragment;
+    use indexmap::indexmap;
+
+    let schema = Schema::new(SchemaSpec {
+        nodes: indexmap! {
+            "doc".to_string() => NodeSpec { content: Some("paragraph+".to_string()), ..NodeSpec::default() },
+            "paragraph".to_string() => NodeSpec { content: Some("text*".to_string()), ..NodeSpec::default() },
+            "text".to_string() => NodeSpec { inline: true, ..NodeSpec::default() },
+        },
+        marks: indexmap! {
+            "noninc".to_string() => MarkSpec {
+                inclusive: false,
+                ..MarkSpec::default()
+            },
+        },
+        top_node: None,
+    }).unwrap();
+
+    // doc(p(noninc("ab"), noninc("cd")))
+    // 两个 text 都有 noninc mark
+    let noninc_mark = schema.marks["noninc"]
+        .create(&schema.marks["noninc"], None)
+        .unwrap();
+    let text_ab = schema.text("ab".to_string(), vec![noninc_mark.clone()]);
+    let text_cd = schema.text("cd".to_string(), vec![noninc_mark]);
+    let para = schema.nodes["paragraph"]
+        .create(None, Some(Fragment::from_array(&[text_ab, text_cd])), vec![])
+        .unwrap();
+    let d = schema.nodes["doc"]
+        .create(None, Some(Fragment::from_node(para)), vec![])
+        .unwrap();
+
+    // pos=3:在两个 noninc text 之间
+    // noninc.inclusive=false,但 noninc IS in right marks => 保留
+    let rp = ResolvedPos::resolve(&d, 3).unwrap();
+    let marks = rp.marks();
+    assert_eq!(marks.len(), 1, "non-inclusive mark should be preserved when in both neighbors");
+    assert_eq!(marks[0].mark_type.name, "noninc");
+}
