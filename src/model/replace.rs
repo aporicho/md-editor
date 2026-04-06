@@ -380,3 +380,65 @@ fn replace_two_way(
     add_range(Some(to), None, depth, &mut content);
     Ok(Fragment::from_array(&content))
 }
+
+/// Internal: build a new fragment by merging content around an inserted slice.
+///
+/// Four resolved positions define the boundaries:
+/// - `from` / `to`: positions in the original document
+/// - `start` / `end`: positions in the prepared slice (from `prepare_slice_for_replace`)
+///
+/// The function collects: [before from] + [open join or range] + [after to].
+///
+/// Corresponds to TS `replaceThreeWay($from, $start, $end, $to, depth)` in replace.ts:187-205.
+fn replace_three_way(
+    from: &ResolvedPos,
+    start: &ResolvedPos,
+    end: &ResolvedPos,
+    to: &ResolvedPos,
+    depth: usize,
+) -> Result<Fragment, ReplaceError> {
+    let open_start: Option<Node> = if from.depth > depth {
+        Some(joinable(from, start, depth + 1)?)
+    } else {
+        None
+    };
+    let open_end: Option<Node> = if to.depth > depth {
+        Some(joinable(end, to, depth + 1)?)
+    } else {
+        None
+    };
+
+    let mut content: Vec<Node> = Vec::new();
+    add_range(None, Some(from), depth, &mut content);
+
+    let both_open_same_index = open_start.is_some()
+        && open_end.is_some()
+        && start.index(Some(depth as i32)) == end.index(Some(depth as i32));
+
+    if both_open_same_index {
+        let os = open_start.as_ref().unwrap();
+        let oe = open_end.as_ref().unwrap();
+        check_join(os, oe)?;
+        add_node(
+            close(os, replace_three_way(from, start, end, to, depth + 1)?)?,
+            &mut content,
+        );
+    } else {
+        if let Some(ref os) = open_start {
+            add_node(
+                close(os, replace_two_way(from, start, depth + 1)?)?,
+                &mut content,
+            );
+        }
+        add_range(Some(start), Some(end), depth, &mut content);
+        if let Some(ref oe) = open_end {
+            add_node(
+                close(oe, replace_two_way(end, to, depth + 1)?)?,
+                &mut content,
+            );
+        }
+    }
+
+    add_range(Some(to), None, depth, &mut content);
+    Ok(Fragment::from_array(&content))
+}
