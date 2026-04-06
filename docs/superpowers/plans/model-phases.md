@@ -33,7 +33,7 @@ Phase 1 → Phase 2.1 → Phase 2.2 → Phase 2.3 → Phase 3.1 → Phase 3.2 �
 | Phase 4.5 | replace 内部辅助函数 | replace.rs 续（remove_range/insert_into/add_node/add_range/close/check_join/prepare_slice_for_replace 等私有函数） | Phase 4.1 + Phase 4.4 | ✅ 完成 |
 | Phase 4.6 | replace 算法积木块 | replace.rs 续（replace_two_way/replace_three_way） | Phase 4.5 | ✅ 完成 |
 | Phase 4.7 | replace 主算法 + Node 方法补全 | replace.rs 续（replace_outer/replace）+ node.rs 补全（Node::replace/Node::slice）+ tests_replace.rs | Phase 4.6 | ✅ 完成 |
-| Phase 5 | 渲染 Stub 与导出 | dom_parser.rs, dom_serializer.rs, mod.rs | Phase 4.7 | ⬜ 待开始 |
+| Phase 5 | 渲染 Stub 与导出 | dom_parser.rs, dom_serializer.rs, mod.rs | Phase 4.7 | ✅ 完成 |
 
 ---
 
