@@ -299,3 +299,30 @@ fn add_range(
         }
     }
 }
+
+/// Internal: check that `sub`'s content type is compatible with `main`'s.
+///
+/// Corresponds to TS `checkJoin(main, sub)` in replace.ts:146-149.
+fn check_join(main: &Node, sub: &Node) -> Result<(), ReplaceError> {
+    if !sub.node_type.compatible_content(&main.node_type) {
+        return Err(ReplaceError(format!(
+            "Cannot join {} onto {}",
+            sub.node_type.name, main.node_type.name
+        )));
+    }
+    Ok(())
+}
+
+/// Internal: verify that the nodes at `depth` in `before` and `after`
+/// are joinable, returning a clone of the node from `before`.
+///
+/// Corresponds to TS `joinable($before, $after, depth)` in replace.ts:151-155.
+fn joinable(
+    before: &ResolvedPos,
+    after: &ResolvedPos,
+    depth: usize,
+) -> Result<Node, ReplaceError> {
+    let node = before.node(Some(depth as i32)).clone();
+    check_join(&node, after.node(Some(depth as i32)))?;
+    Ok(node)
+}
