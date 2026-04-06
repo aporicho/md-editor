@@ -231,4 +231,31 @@ impl ResolvedPos {
         }
         parent.child(index - 1).ok().cloned()
     }
+
+    /// Query whether the given position shares the same parent node.
+    pub fn same_parent(&self, other: &ResolvedPos) -> bool {
+        self.pos - self.parent_offset == other.pos - other.parent_offset
+    }
+
+    /// Return the greater of this and the given position.
+    pub fn max<'a>(&'a self, other: &'a ResolvedPos) -> &'a ResolvedPos {
+        if other.pos > self.pos { other } else { self }
+    }
+
+    /// Return the smaller of this and the given position.
+    pub fn min<'a>(&'a self, other: &'a ResolvedPos) -> &'a ResolvedPos {
+        if other.pos < self.pos { other } else { self }
+    }
+
+    /// The depth up to which this position and the given (non-resolved)
+    /// position share the same parent nodes.
+    pub fn shared_depth(&self, pos: usize) -> usize {
+        for depth in (1..=self.depth).rev() {
+            let d = depth as i32;
+            if self.start(Some(d)) <= pos && self.end(Some(d)) >= pos {
+                return depth;
+            }
+        }
+        0
+    }
 }

@@ -609,3 +609,67 @@ fn resolve_integration_node_before_after_at_text_boundaries() {
     assert_eq!(rp.node_before().unwrap().text.as_deref(), Some("cdef"));
     assert!(rp.node_after().is_none());
 }
+
+// --- Task 1: 简单位置 / 比较方法测试 ---
+
+#[test]
+fn same_parent_returns_true_for_same_parent_content() {
+    let d = test_doc();
+    // pos=6 和 pos=7 都在 p2 content 内,parent 相同
+    let rp6 = ResolvedPos::resolve(&d, 6).unwrap();
+    let rp7 = ResolvedPos::resolve(&d, 7).unwrap();
+    assert!(rp6.same_parent(&rp7));
+}
+
+#[test]
+fn same_parent_returns_false_for_different_parents() {
+    let d = test_doc();
+    // pos=1(在 p1 内)和 pos=7(在 p2 内)parent 不同
+    let rp1 = ResolvedPos::resolve(&d, 1).unwrap();
+    let rp7 = ResolvedPos::resolve(&d, 7).unwrap();
+    assert!(!rp1.same_parent(&rp7));
+}
+
+#[test]
+fn max_returns_the_greater_pos() {
+    let d = test_doc();
+    let rp3 = ResolvedPos::resolve(&d, 3).unwrap();
+    let rp7 = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp3.max(&rp7).pos, 7);
+    assert_eq!(rp7.max(&rp3).pos, 7);
+    // 相等时返回 self
+    let rp3b = ResolvedPos::resolve(&d, 3).unwrap();
+    assert_eq!(rp3.max(&rp3b).pos, 3);
+}
+
+#[test]
+fn min_returns_the_smaller_pos() {
+    let d = test_doc();
+    let rp3 = ResolvedPos::resolve(&d, 3).unwrap();
+    let rp7 = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp3.min(&rp7).pos, 3);
+    assert_eq!(rp7.min(&rp3).pos, 3);
+}
+
+#[test]
+fn shared_depth_returns_deepest_shared_ancestor() {
+    let d = test_doc();
+    // pos=7 的 depth=2, start(1)=5, end(1)=11, start(2)=6, end(2)=10
+    // shared_depth(7): start(2)=6 <= 7 && end(2)=10 >= 7 ⇒ 返回 2
+    let rp7 = ResolvedPos::resolve(&d, 7).unwrap();
+    assert_eq!(rp7.shared_depth(7), 2);
+    // shared_depth(5): start(2)=6 <= 5? NO, 继续 depth=1: start(1)=5 <= 5 && end(1)=11 >= 5 ⇒ 1
+    assert_eq!(rp7.shared_depth(5), 1);
+    // shared_depth(3): start(2)=6 <= 3? NO. start(1)=5 <= 3? NO. ⇒ 返回 0
+    assert_eq!(rp7.shared_depth(3), 0);
+    // shared_depth(12): start(2)=6 <= 12 && end(2)=10 >= 12? NO. start(1)=5 <= 12 && end(1)=11 >= 12? NO. ⇒ 0
+    assert_eq!(rp7.shared_depth(12), 0);
+}
+
+#[test]
+fn shared_depth_at_top_level_returns_zero() {
+    let d = test_doc();
+    // pos=4 depth=0,循环 depth>0 不执行,返回 0
+    let rp4 = ResolvedPos::resolve(&d, 4).unwrap();
+    assert_eq!(rp4.shared_depth(7), 0);
+}
